@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GST Audit Assistant</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#101820; --paper:#F7F5F0; --panel:#FFFFFF; --line:#DFDACD;
+    --accent:#B5451B; --accent-soft:#F4E3D8;
+    --green:#1E6B4E; --green-bg:#E5F3EC;
+    --yellow:#9A6A00; --yellow-bg:#FCF1D8;
+    --red:#B5311E; --red-bg:#FBE6E1;
+  }
+  body{ background:var(--paper); color:var(--ink); font-family:'Inter',sans-serif; }
+  .font-display{ font-family:'Space Grotesk',sans-serif; }
+  .font-mono{ font-family:'IBM Plex Mono',monospace; }
+  .card{ background:var(--panel); border:1px solid var(--line); }
+  .ledger-line{ border-bottom:1px dashed var(--line); }
+  .btn-primary{ background:var(--ink); color:var(--paper); transition:.15s ease; }
+  .btn-primary:hover{ background:var(--accent); }
+  .btn-primary:disabled{ opacity:.5; cursor:not-allowed; }
+  input, select{ background:var(--paper); border:1px solid var(--line); color:var(--ink); }
+  input:focus, select:focus{ outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); }
+  ::placeholder{ color:#9C9384; }
+  .tab-active{ background:var(--ink); color:var(--paper); }
+  .tab-inactive{ background:transparent; color:var(--ink); }
+  .pill-green{ background:var(--green-bg); color:var(--green); border:1px solid var(--green); }
+  .pill-yellow{ background:var(--yellow-bg); color:var(--yellow); border:1px solid var(--yellow); }
+  .pill-red{ background:var(--red-bg); color:var(--red); border:1px solid var(--red); }
+  .pill-gray{ background:#EDEAE2; color:#5A5346; border:1px solid var(--line); }
+  .json-box{ background:#0F1620; color:#CFE8D8; }
+  .json-box .k{ color:#8FB8E8; } .json-box .s{ color:#E8C878; } .json-box .n{ color:#C97D5C; }
+  .scanline::before{ content:""; position:absolute; inset:0; background:repeating-linear-gradient(180deg, transparent 0 3px, rgba(16,24,32,.015) 3px 4px); pointer-events:none; }
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+  .spinner{ border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; width:16px; height:16px; animation:spin .7s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce){ .spinner{ animation:none; } }
+</style>
+</head>
+<body class="min-h-screen">
+
+<header class="border-b" style="border-color:var(--line);">
+  <div class="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-sm flex items-center justify-center font-display font-bold text-lg" style="background:var(--ink); color:var(--paper);">₹</div>
+      <div>
+        <h1 class="font-display font-semibold text-lg tracking-tight leading-none">GST Audit Assistant</h1>
+        <p class="text-xs mt-0.5" style="color:#7A7263;">Invoice validation &amp; GSTR-2B reconciliation</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 text-xs font-mono">
+      <span id="statusDot" class="w-2 h-2 rounded-full inline-block" style="background:#B5451B;"></span>
+      <span id="statusText" style="color:#7A7263;">checking backend…</span>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-6 py-8">
+
+  <!-- Tabs -->
+  <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+    <button onclick="switchTab('validate')" id="tab-validate" class="tab-active px-4 py-2 rounded text-sm font-medium font-display transition">Validate Invoice</button>
+    <button onclick="switchTab('match')" id="tab-match" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">GSTR-2B Match</button>
+    <button onclick="switchTab('bulk')" id="tab-bulk" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">Bulk Validate</button>
+    <button onclick="switchTab('history')" id="tab-history" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">History</button>
+  </div>
+
+  <!-- ================= VALIDATE PANEL ================= -->
+  <section id="panel-validate" class="grid lg:grid-cols-5 gap-6">
+    <div class="lg:col-span-2 card rounded-lg p-6">
+      <h2 class="font-display font-semibold mb-1">Invoice details</h2>
+      <p class="text-xs mb-5" style="color:#7A7263;">Fields marked * are required for validation.</p>
+
+      <form id="validateForm" class="space-y-4">
+        <div>
+          <label class="text-xs font-medium block mb-1">Supplier GSTIN *</label>
+          <input required name="supplier_gstin" placeholder="27AAPFU0939F1ZV" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
+        </div>
+        <div>
+          <label class="text-xs font-medium block mb-1">Buyer GSTIN</label>
+          <input name="buyer_gstin" placeholder="Optional" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-medium block mb-1">Seller state code</label>
+            <input name="seller_state_code" placeholder="Optional" class="w-full px-3 py-2 rounded text-sm font-mono">
+          </div>
+          <div>
+            <label class="text-xs font-medium block mb-1">Place of supply *</label>
+            <input required name="place_of_supply_code" placeholder="e.g. 27" class="w-full px-3 py-2 rounded text-sm font-mono">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-medium block mb-1">Invoice number</label>
+          <input name="invoice_number" placeholder="INV-001" class="w-full px-3 py-2 rounded text-sm font-mono">
+        </div>
+        <div class="ledger-line pt-4">
+          <label class="text-xs font-medium block mb-1">Taxable amount (₹) *</label>
+          <input required type="number" step="0.01" name="taxable_amount" placeholder="100000" class="w-full px-3 py-2 rounded text-sm font-mono">
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="text-xs font-medium block mb-1">CGST</label>
+            <input type="number" step="0.01" name="cgst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
+          </div>
+          <div>
+            <label class="text-xs font-medium block mb-1">SGST</label>
+            <input type="number" step="0.01" name="sgst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
+          </div>
+          <div>
+            <label class="text-xs font-medium block mb-1">IGST</label>
+            <input type="number" step="0.01" name="igst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-medium block mb-1">Item tax rate (%)</label>
+          <select name="item_tax_rate" class="w-full px-3 py-2 rounded text-sm font-mono">
+            <option value="0">0%</option><option value="5">5%</option><option value="12">12%</option>
+            <option value="18" selected>18%</option><option value="28">28%</option>
+          </select>
+        </div>
+        <button type="submit" id="validateBtn" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-2 flex items-center justify-center gap-2">
+          Run validation
+        </button>
+      </form>
+    </div>
+
+    <div class="lg:col-span-3 space-y-4">
+      <div id="validateEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+        <div class="font-mono text-xs">— NO RESULT YET —</div>
+        <p class="text-sm mt-2">Fill the form and run validation to see results here.</p>
+      </div>
+      <div id="validateResult" class="hidden space-y-4"></div>
+    </div>
+  </section>
+
+  <!-- ================= MATCH PANEL ================= -->
+  <section id="panel-match" class="hidden">
+    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+      <button onclick="switchMatchMode('json')" id="mmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
+      <button onclick="switchMatchMode('csv')" id="mmode-csv" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
+    </div>
+
+    <div id="matchModeJson" class="grid lg:grid-cols-2 gap-6 mb-6">
+      <div class="card rounded-lg p-6">
+        <h2 class="font-display font-semibold mb-1">Purchase invoices</h2>
+        <p class="text-xs mb-3" style="color:#7A7263;">JSON array — your books.</p>
+        <textarea id="purchaseJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
+      </div>
+      <div class="card rounded-lg p-6">
+        <h2 class="font-display font-semibold mb-1">GSTR-2B invoices</h2>
+        <p class="text-xs mb-3" style="color:#7A7263;">JSON array — portal records.</p>
+        <textarea id="gstr2bJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
+      </div>
+      <div class="lg:col-span-2">
+        <button id="matchBtn" onclick="runMatch()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
+          Run reconciliation
+        </button>
+      </div>
+    </div>
+
+    <div id="matchModeCsv" class="hidden grid lg:grid-cols-2 gap-6 mb-6">
+      <div class="card rounded-lg p-6">
+        <h2 class="font-display font-semibold mb-1">Purchase invoices file</h2>
+        <p class="text-xs mb-3" style="color:#7A7263;">CSV or Excel — columns: invoice_number, supplier_gstin, tax_amount</p>
+        <input type="file" id="purchaseCsv" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
+      </div>
+      <div class="card rounded-lg p-6">
+        <h2 class="font-display font-semibold mb-1">GSTR-2B file</h2>
+        <p class="text-xs mb-3" style="color:#7A7263;">CSV or Excel — columns: invoice_number, supplier_gstin, tax_amount</p>
+        <input type="file" id="gstr2bCsv" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
+      </div>
+      <div class="lg:col-span-2">
+        <button id="matchCsvBtn" onclick="runMatchCsv()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
+          Upload &amp; reconcile
+        </button>
+      </div>
+    </div>
+
+    <div id="matchEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+      <div class="font-mono text-xs">— NO RESULT YET —</div>
+      <p class="text-sm mt-2">Sample data is pre-filled, or upload CSVs above.</p>
+    </div>
+    <div id="matchResult" class="hidden space-y-4"></div>
+  </section>
+
+  <!-- ================= BULK VALIDATE PANEL ================= -->
+  <section id="panel-bulk" class="hidden">
+    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+      <button onclick="switchBulkMode('json')" id="bmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
+      <button onclick="switchBulkMode('file')" id="bmode-file" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
+    </div>
+
+    <div id="bulkModeJson" class="card rounded-lg p-6 mb-6">
+      <h2 class="font-display font-semibold mb-1">Invoices (JSON array)</h2>
+      <p class="text-xs mb-3" style="color:#7A7263;">Each item: supplier_gstin, place_of_supply_code, taxable_amount, cgst_amount, sgst_amount, igst_amount, invoice_number, item_tax_rate</p>
+      <textarea id="bulkJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
+      <button id="bulkJsonBtn" onclick="runBulkJson()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm mt-4 flex items-center gap-2">Run bulk validation</button>
+    </div>
+
+    <div id="bulkModeFile" class="hidden card rounded-lg p-6 mb-6">
+      <h2 class="font-display font-semibold mb-1">Upload CSV / Excel</h2>
+      <p class="text-xs mb-3" style="color:#7A7263;">Columns: supplier_gstin, place_of_supply_code, taxable_amount, cgst_amount, sgst_amount, igst_amount, invoice_number, item_tax_rate</p>
+      <input type="file" id="bulkFile" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
+      <button id="bulkFileBtn" onclick="runBulkFile()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm mt-4 flex items-center gap-2">Upload &amp; validate</button>
+    </div>
+
+    <div id="bulkEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+      <div class="font-mono text-xs">— NO RESULT YET —</div>
+      <p class="text-sm mt-2">Paste JSON or upload a file to validate multiple invoices at once.</p>
+    </div>
+    <div id="bulkResult" class="hidden space-y-4"></div>
+  </section>
+
+  <!-- ================= HISTORY PANEL ================= -->
+  <section id="panel-history" class="hidden">
+    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+      <button onclick="switchHistMode('validations')" id="hmode-validations" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Validations</button>
+      <button onclick="switchHistMode('matches')" id="hmode-matches" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">GSTR-2B Matches</button>
+    </div>
+
+    <div class="card rounded-lg p-4 mb-6 grid md:grid-cols-5 gap-3 items-end">
+      <div>
+        <label class="text-xs font-medium block mb-1">From</label>
+        <input type="date" id="histDateFrom" class="w-full px-3 py-2 rounded text-sm font-mono">
+      </div>
+      <div>
+        <label class="text-xs font-medium block mb-1">To</label>
+        <input type="date" id="histDateTo" class="w-full px-3 py-2 rounded text-sm font-mono">
+      </div>
+      <div id="histSeverityWrap">
+        <label class="text-xs font-medium block mb-1">Severity</label>
+        <select id="histSeverity" class="w-full px-3 py-2 rounded text-sm font-mono">
+          <option value="">All</option><option value="GREEN">Green</option>
+          <option value="YELLOW">Yellow</option><option value="RED">Red</option>
+        </select>
+      </div>
+      <div id="histSearchWrap">
+        <label class="text-xs font-medium block mb-1">Search (GSTIN / Invoice #)</label>
+        <input id="histSearch" placeholder="Search..." class="w-full px-3 py-2 rounded text-sm font-mono">
+      </div>
+      <button onclick="loadHistory(0)" class="btn-primary px-4 py-2 rounded font-display font-medium text-sm">Apply filters</button>
+    </div>
+
+    <div id="histEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+      <div class="font-mono text-xs">— LOADING —</div>
+    </div>
+    <div id="histResult" class="hidden space-y-4"></div>
+  </section>
+
+</main>
+
+<script>
+const API = 'http://127.0.0.1:8000';
+
+// ---------- health check ----------
+fetch(API + '/api/v1/health').then(r=>{
+  if(r.ok){ document.getElementById('statusDot').style.background='#1E6B4E'; document.getElementById('statusText').textContent='backend online'; }
+  else throw new Error();
+}).catch(()=>{ document.getElementById('statusText').textContent='backend unreachable'; });
+
+// ---------- tabs ----------
+function switchTab(name){
+  ['validate','match','bulk','history'].forEach(t=>{
+    document.getElementById('panel-'+t).classList.toggle('hidden', t!==name);
+    document.getElementById('tab-'+t).classList.toggle('tab-active', t===name);
+    document.getElementById('tab-'+t).classList.toggle('tab-inactive', t!==name);
+  });
+  if(name==='history') loadHistory(0);
+}
+
+// ---------- helpers ----------
+function pillClass(sev){
+  return sev==='RED' ? 'pill-red' : sev==='YELLOW' ? 'pill-yellow' : sev==='GREEN' ? 'pill-green' : 'pill-gray';
+}
+function statusPillClass(s){
+  if(s==='MATCHED') return 'pill-green';
+  if(s==='MISMATCHED') return 'pill-yellow';
+  if(s==='MISSING_IN_GSTR2B' || s==='PORTAL_ONLY') return 'pill-red';
+  return 'pill-gray';
+}
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function syntaxHighlight(json){
+  let s = JSON.stringify(json, null, 2);
+  s = escapeHtml(s);
+  s = s.replace(/(&quot;.*?&quot;)(:)/g, '<span class="k">$1</span>$2');
+  s = s.replace(/: (&quot;.*?&quot;)/g, ': <span class="s">$1</span>');
+  s = s.replace(/: (-?\d+\.?\d*)/g, ': <span class="n">$1</span>');
+  return s;
+}
+function jsonBox(data){
+  return `<div class="json-box rounded-lg p-4 text-xs font-mono overflow-x-auto"><pre>${syntaxHighlight(data)}</pre></div>`;
+}
+function setLoading(btn, loading, label){
+  btn.disabled = loading;
+  btn.innerHTML = loading ? `<span class="spinner"></span> Running…` : label;
+}
+
+// ---------- validate ----------
+document.getElementById('validateForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const btn = document.getElementById('validateBtn');
+  setLoading(btn, true, 'Run validation');
+
+  const fd = new FormData(e.target);
+  const payload = {};
+  for(const [k,v] of fd.entries()){
+    if(v === '') continue;
+    if(['taxable_amount','cgst_amount','sgst_amount','igst_amount','item_tax_rate'].includes(k)) payload[k] = parseFloat(v);
+    else payload[k] = v;
+  }
+
+  document.getElementById('validateEmpty').classList.add('hidden');
+  const resultEl = document.getElementById('validateResult');
+  resultEl.classList.remove('hidden');
+  resultEl.innerHTML = '';
+
+  try{
+    const res = await fetch(API + '/api/v1/validate-invoice', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(!res.ok){ throw new Error(data.detail || 'Validation failed'); }
+    renderValidateResult(data);
+  }catch(err){
+    resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
+  }finally{
+    setLoading(btn, false, 'Run validation');
+  }
+});
+
+function renderValidateResult(data){
+  const sevPill = pillClass(data.overall_severity);
+  const flagsHtml = (data.flags && data.flags.length)
+    ? data.flags.map(f=>`
+      <div class="ledger-line py-3 flex items-start gap-3">
+        <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${pillClass(f.severity)} shrink-0 mt-0.5">${f.severity}</span>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium">${escapeHtml(f.message)}</p>
+          <p class="text-xs mt-1 font-mono" style="color:#7A7263;">${escapeHtml(f.field)} · ${escapeHtml(f.rule_code||'')}${f.expected ? ` · expected ${escapeHtml(f.expected)}` : ''}${f.found ? ` · found ${escapeHtml(f.found)}` : ''}</p>
+        </div>
+      </div>`).join('')
+    : `<p class="text-sm py-3" style="color:#7A7263;">No issues found — invoice is clean.</p>`;
+
+  document.getElementById('validateResult').innerHTML = `
+    <div class="card rounded-lg p-6">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <h3 class="font-display font-semibold text-base">${escapeHtml(data.gstin)}</h3>
+          <p class="text-xs mt-0.5" style="color:#7A7263;">${escapeHtml(data.state_name || 'Unknown state')} (${escapeHtml(data.state_code||'—')})</p>
+        </div>
+        <span class="text-xs font-mono font-semibold px-3 py-1 rounded ${sevPill}">${data.overall_severity}</span>
+      </div>
+      <div class="grid grid-cols-3 gap-3 text-xs mb-4">
+        <div class="card rounded p-3"><p style="color:#7A7263;">Format</p><p class="font-mono font-medium mt-1">${data.is_valid_format ? 'Valid' : 'Invalid'}</p></div>
+        <div class="card rounded p-3"><p style="color:#7A7263;">Transaction</p><p class="font-mono font-medium mt-1">${escapeHtml(data.transaction_type)}</p></div>
+        <div class="card rounded p-3"><p style="color:#7A7263;">Expected tax</p><p class="font-mono font-medium mt-1">${escapeHtml(data.expected_tax_type || '—')}</p></div>
+      </div>
+      <h4 class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:#7A7263;">Flags</h4>
+      ${flagsHtml}
+    </div>
+    ${jsonBox(data)}
+  `;
+}
+
+// ---------- match ----------
+document.getElementById('purchaseJson').value = JSON.stringify([
+  {invoice_number:"INV-001", supplier_gstin:"27AAPFU0939F1ZV", tax_amount:18000},
+  {invoice_number:"INV-002", supplier_gstin:"08AAPFU0939F1ZV", tax_amount:5000},
+  {invoice_number:"INV-003", supplier_gstin:"29AAPFU0939F1ZV", tax_amount:3200}
+], null, 2);
+document.getElementById('gstr2bJson').value = JSON.stringify([
+  {invoice_number:"INV-001", supplier_gstin:"27AAPFU0939F1ZV", tax_amount:18000},
+  {invoice_number:"INV-002", supplier_gstin:"08AAPFU0939F1ZV", tax_amount:4700}
+], null, 2);
+
+function switchMatchMode(mode){
+  ['json','csv'].forEach(m=>{
+    document.getElementById('matchMode'+(m==='json'?'Json':'Csv')).classList.toggle('hidden', m!==mode);
+    document.getElementById('mmode-'+m).classList.toggle('tab-active', m===mode);
+    document.getElementById('mmode-'+m).classList.toggle('tab-inactive', m!==mode);
+  });
+}
+
+async function runMatchCsv(){
+  const btn = document.getElementById('matchCsvBtn');
+  const emptyEl = document.getElementById('matchEmpty');
+  const resultEl = document.getElementById('matchResult');
+  const pFile = document.getElementById('purchaseCsv').files[0];
+  const gFile = document.getElementById('gstr2bCsv').files[0];
+
+  if(!pFile || !gFile){ alert('Please select both CSV files.'); return; }
+
+  setLoading(btn, true, 'Upload &amp; reconcile');
+  emptyEl.classList.add('hidden');
+  resultEl.classList.remove('hidden');
+  resultEl.innerHTML = '';
+
+  const fd = new FormData();
+  fd.append('purchase_file', pFile);
+  fd.append('gstr2b_file', gFile);
+
+  try{
+    const res = await fetch(API + '/api/v1/match-gstr-file', { method:'POST', body: fd });
+    const data = await res.json();
+    if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
+    renderMatchResult(data);
+  }catch(err){
+    resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
+  }finally{
+    setLoading(btn, false, 'Upload &amp; reconcile');
+  }
+}
+
+async function runMatch(){
+  const btn = document.getElementById('matchBtn');
+  const emptyEl = document.getElementById('matchEmpty');
+  const resultEl = document.getElementById('matchResult');
+
+  let purchase, gstr2b;
+  try{
+    purchase = JSON.parse(document.getElementById('purchaseJson').value);
+    gstr2b = JSON.parse(document.getElementById('gstr2bJson').value);
+  }catch(e){
+    alert('Invalid JSON in one of the fields. Please check formatting.');
+    return;
+  }
+
+  setLoading(btn, true, 'Run reconciliation');
+  emptyEl.classList.add('hidden');
+  resultEl.classList.remove('hidden');
+  resultEl.innerHTML = '';
+
+  try{
+    const res = await fetch(API + '/api/v1/match-gstr', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({purchase_invoices: purchase, gstr2b_invoices: gstr2b})
+    });
+    const data = await res.json();
+    if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
+    renderMatchResult(data);
+  }catch(err){
+    resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
+  }finally{
+    setLoading(btn, false, 'Run reconciliation');
+  }
+}
+
+function renderMatchResult(data){
+  const summary = `
+    <div class="grid grid-cols-4 gap-3">
+      <div class="card rounded-lg p-4 text-center"><p class="text-2xl font-display font-semibold">${data.total}</p><p class="text-xs" style="color:#7A7263;">Total</p></div>
+      <div class="card rounded-lg p-4 text-center" style="border-color:var(--green);"><p class="text-2xl font-display font-semibold" style="color:var(--green);">${data.matched}</p><p class="text-xs" style="color:#7A7263;">Matched</p></div>
+      <div class="card rounded-lg p-4 text-center" style="border-color:var(--yellow);"><p class="text-2xl font-display font-semibold" style="color:var(--yellow);">${data.mismatched}</p><p class="text-xs" style="color:#7A7263;">Mismatched</p></div>
+      <div class="card rounded-lg p-4 text-center" style="border-color:var(--red);"><p class="text-2xl font-display font-semibold" style="color:var(--red);">${data.missing_in_gstr2b}</p><p class="text-xs" style="color:#7A7263;">Missing</p></div>
+    </div>`;
+
+  const rows = data.results.map(r=>`
+    <div class="ledger-line py-3 flex items-start gap-3">
+      <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${statusPillClass(r.status)} shrink-0 mt-0.5">${r.status.replace(/_/g,' ')}</span>
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-medium font-mono">${escapeHtml(r.invoice_number||'—')} <span style="color:#7A7263; font-weight:400;">· ${escapeHtml(r.supplier_gstin||'—')}</span></p>
+        ${r.discrepancies.length ? `<p class="text-xs mt-1" style="color:#7A7263;">${r.discrepancies.map(escapeHtml).join('; ')}</p>` : ''}
+      </div>
+      ${r.tax_diff ? `<span class="text-xs font-mono shrink-0" style="color:var(--yellow);">Δ ₹${r.tax_diff}</span>` : ''}
+    </div>`).join('');
+
+  document.getElementById('matchResult').innerHTML = `
+    ${summary}
+    <div class="card rounded-lg p-6">
+      <h4 class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:#7A7263;">Line-by-line</h4>
+      ${rows}
+    </div>
+    ${jsonBox(data)}
+  `;
+}
+
+// ---------- bulk validate ----------
+document.getElementById('bulkJson').value = JSON.stringify([
+  {supplier_gstin:"27AAPFU0939F1ZV", place_of_supply_code:"27", taxable_amount:100000, cgst_amount:9000, sgst_amount:9000, igst_amount:0, invoice_number:"INV-B01", item_tax_rate:18},
+  {supplier_gstin:"27AAPFU0939F1Z0", place_of_supply_code:"08", taxable_amount:50000, cgst_amount:0, sgst_amount:0, igst_amount:9000, invoice_number:"INV-B02", item_tax_rate:18}
+], null, 2);
+
+function switchBulkMode(mode){
+  ['json','file'].forEach(m=>{
+    document.getElementById('bulkMode'+(m==='json'?'Json':'File')).classList.toggle('hidden', m!==mode);
+    document.getElementById('bmode-'+m).classList.toggle('tab-active', m===mode);
+    document.getElementById('bmode-'+m).classList.toggle('tab-inactive', m!==mode);
+  });
+}
+
+async function runBulkJson(){
+  const btn = document.getElementById('bulkJsonBtn');
+  let invoices;
+  try{ invoices = JSON.parse(document.getElementById('bulkJson').value); }
+  catch(e){ alert('Invalid JSON.'); return; }
+
+  setLoading(btn, true, 'Run bulk validation');
+  document.getElementById('bulkEmpty').classList.add('hidden');
+  const resultEl = document.getElementById('bulkResult');
+  resultEl.classList.remove('hidden'); resultEl.innerHTML = '';
+
+  try{
+    const res = await fetch(API + '/api/v1/validate-bulk-invoices', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({invoices})
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Bulk validation failed');
+    renderBulkResult(data);
+  }catch(err){
+    resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
+  }finally{ setLoading(btn, false, 'Run bulk validation'); }
+}
+
+async function runBulkFile(){
+  const btn = document.getElementById('bulkFileBtn');
+  const file = document.getElementById('bulkFile').files[0];
+  if(!file){ alert('Please select a file.'); return; }
+
+  setLoading(btn, true, 'Upload & validate');
+  document.getElementById('bulkEmpty').classList.add('hidden');
+  const resultEl = document.getElementById('bulkResult');
+  resultEl.classList.remove('hidden'); resultEl.innerHTML = '';
+
+  const fd = new FormData(); fd.append('file', file);
+  try{
+    const res = await fetch(API + '/api/v1/validate-bulk-invoices-file', { method:'POST', body: fd });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Bulk validation failed');
+    renderBulkResult(data);
+  }catch(err){
+    resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
+  }finally{ setLoading(btn, false, 'Upload & validate'); }
+}
+
+function renderBulkResult(data){
+  const summary = `
+    <div class="grid grid-cols-4 gap-3">
+      <div class="card rounded-lg p-4 text-center"><p class="text-2xl font-display font-semibold">${data.total}</p><p class="text-xs" style="color:#7A7263;">Total</p></div>
+      <div class="card rounded-lg p-4 text-center" style="border-color:var(--green);"><p class="text-2xl font-display font-semibold" style="color:var(--green);">${data.green}</p><p class="text-xs" style="color:#7A7263;">Green</p></div>
+      <div class="card rounded-lg p-4 text-center" style="border-color:var(--yellow);"><p class="text-2xl font-display font-semibold" style="color:var(--yellow);">${data.yellow}</p><p class="text-xs" style="color:#7A7263;">Yellow</p></div>
+      <div class="card rounded-lg p-4 text-center" style="border-color:var(--red);"><p class="text-2xl font-display font-semibold" style="color:var(--red);">${data.red}</p><p class="text-xs" style="color:#7A7263;">Red</p></div>
+    </div>`;
+
+  const rows = data.results.map(r=>`
+    <div class="ledger-line py-3 flex items-start gap-3">
+      <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${pillClass(r.overall_severity)} shrink-0 mt-0.5">${r.overall_severity}</span>
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-medium font-mono">${escapeHtml(r.invoice_number||'—')} <span style="color:#7A7263; font-weight:400;">· ${escapeHtml(r.gstin)}</span></p>
+        <p class="text-xs mt-1" style="color:#7A7263;">${r.transaction_type} · ${r.flag_count} flag(s)${r.flags.length ? ': ' + r.flags.map(f=>escapeHtml(f.message)).join(' · ') : ''}</p>
+      </div>
+    </div>`).join('');
+
+  document.getElementById('bulkResult').innerHTML = `
+    ${summary}
+    <button onclick="downloadPdf()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm">Download Audit Report (PDF)</button>
+    <div class="card rounded-lg p-6">
+      <h4 class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:#7A7263;">Line-by-line</h4>
+      ${rows}
+    </div>
+    ${jsonBox(data)}
+  `;
+  window._lastBulkData = data;
+}
+
+async function downloadPdf(){
+  const data = window._lastBulkData;
+  if(!data){ alert('Run a bulk validation first.'); return; }
+  const clientName = prompt('Client name for this report:') || '';
+  const payload = {
+    firm_name: 'GST Audit Assistant',
+    client_name: clientName,
+    summary: {total: data.total, green: data.green, yellow: data.yellow, red: data.red},
+    results: data.results
+  };
+  try{
+    const res = await fetch(API + '/api/v1/export-audit-pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error('PDF generation failed');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'gst_audit_report.pdf'; a.click();
+    URL.revokeObjectURL(url);
+  }catch(err){
+    alert('Error: ' + err.message);
+  }
+}
+
+// ---------- history ----------
+let histMode = 'validations';
+let histOffset = 0;
+const HIST_LIMIT = 15;
+
+function switchHistMode(mode){
+  histMode = mode; histOffset = 0;
+  ['validations','matches'].forEach(m=>{
+    document.getElementById('hmode-'+m).classList.toggle('tab-active', m===mode);
+    document.getElementById('hmode-'+m).classList.toggle('tab-inactive', m!==mode);
+  });
+  document.getElementById('histSeverityWrap').classList.toggle('hidden', mode!=='validations');
+  document.getElementById('histSearchWrap').classList.toggle('hidden', mode!=='validations');
+  loadHistory(0);
+}
+
+async function loadHistory(offset){
+  histOffset = offset;
+  const emptyEl = document.getElementById('histEmpty');
+  const resultEl = document.getElementById('histResult');
+  emptyEl.classList.remove('hidden'); emptyEl.innerHTML = '<div class="font-mono text-xs">— LOADING —</div>';
+  resultEl.classList.add('hidden');
+
+  const dateFrom = document.getElementById('histDateFrom').value;
+  const dateTo = document.getElementById('histDateTo').value;
+  const params = new URLSearchParams({limit: HIST_LIMIT, offset});
+  if(dateFrom) params.set('date_from', dateFrom);
+  if(dateTo) params.set('date_to', dateTo);
+
+  let url;
+  if(histMode === 'validations'){
+    const severity = document.getElementById('histSeverity').value;
+    const search = document.getElementById('histSearch').value.trim();
+    if(severity) params.set('severity', severity);
+    if(search) params.set('search', search);
+    url = API + '/api/v1/audit-history/validations?' + params.toString();
+  } else {
+    url = API + '/api/v1/audit-history/matches?' + params.toString();
+  }
+
+  try{
+    const res = await fetch(url);
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Could not load history');
+    emptyEl.classList.add('hidden');
+    resultEl.classList.remove('hidden');
+    resultEl.innerHTML = histMode === 'validations' ? renderHistValidations(data) : renderHistMatches(data);
+  }catch(err){
+    emptyEl.innerHTML = `<p class="text-sm" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function histPagination(data){
+  const shown = data.offset + data.results.length;
+  return `
+    <div class="flex items-center justify-between text-xs font-mono" style="color:#7A7263;">
+      <span>Showing ${data.results.length ? data.offset+1 : 0}–${shown} of ${data.total}</span>
+      <div class="flex gap-2">
+        <button ${data.offset<=0?'disabled':''} onclick="loadHistory(${Math.max(0,data.offset-HIST_LIMIT)})" class="btn-primary px-3 py-1 rounded text-xs">Prev</button>
+        <button ${shown>=data.total?'disabled':''} onclick="loadHistory(${data.offset+HIST_LIMIT})" class="btn-primary px-3 py-1 rounded text-xs">Next</button>
+      </div>
+    </div>`;
+}
+
+function renderHistValidations(data){
+  if(!data.results.length) return `<div class="card rounded-lg p-10 text-center" style="color:#9C9384;"><div class="font-mono text-xs">— NO RECORDS —</div></div>`;
+  const rows = data.results.map(r=>`
+    <div class="ledger-line py-3 flex items-start gap-3">
+      <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${pillClass(r.overall_severity)} shrink-0 mt-0.5">${r.overall_severity}</span>
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-medium font-mono">${escapeHtml(r.invoice_number||'—')} <span style="color:#7A7263; font-weight:400;">· ${escapeHtml(r.gstin||'—')}</span></p>
+        <p class="text-xs mt-1" style="color:#7A7263;">${escapeHtml(r.transaction_type||'—')} · ${r.flag_count} flag(s) · ${r.is_valid ? 'valid' : 'invalid'} format</p>
+      </div>
+      <span class="text-[10px] font-mono shrink-0" style="color:#9C9384;">${escapeHtml((r.created_at||'').replace('T',' ').slice(0,19))}</span>
+    </div>`).join('');
+  return `<div class="card rounded-lg p-6">${rows}</div><div class="card rounded-lg p-3">${histPagination(data)}</div>`;
+}
+
+function renderHistMatches(data){
+  if(!data.results.length) return `<div class="card rounded-lg p-10 text-center" style="color:#9C9384;"><div class="font-mono text-xs">— NO RECORDS —</div></div>`;
+  const rows = data.results.map(r=>`
+    <div class="ledger-line py-3 flex items-center gap-3 text-xs font-mono">
+      <span class="pill-gray px-2 py-0.5 rounded shrink-0">${escapeHtml(r.source||'—')}</span>
+      <span class="flex-1">Total ${r.total} · <span style="color:var(--green);">Matched ${r.matched}</span> · <span style="color:var(--yellow);">Mismatched ${r.mismatched}</span> · <span style="color:var(--red);">Missing ${r.missing_in_gstr2b}</span></span>
+      <span style="color:#9C9384;">${escapeHtml((r.created_at||'').replace('T',' ').slice(0,19))}</span>
+    </div>`).join('');
+  return `<div class="card rounded-lg p-6">${rows}</div><div class="card rounded-lg p-3">${histPagination(data)}</div>`;
+}
+</script>
+</body>
+</html>
