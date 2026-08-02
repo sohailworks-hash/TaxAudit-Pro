@@ -1,12 +1,7 @@
-# Step 3 — New Python Dependencies
-# Add these to your existing requirements.txt
-
-# Already in most FastAPI projects:
-# fastapi
-# uvicorn
-# python-multipart   (for UploadFile — ensure it's present)
-
-# Step 3 NEW additions:
-openpyxl==3.1.2          # Excel report generation (multi-sheet .xlsx)
-pandas==2.2.1            # CSV/Excel GSTR-2B parsing + data manipulation
-aiofiles==23.2.1         # Async file handling in FastAPI
+fastapi
+uvicorn
+python-multipart
+openpyxl==3.1.2
+pandas==2.2.2
+aiofiles==23.2.1
+reportlab
