@@ -51,9 +51,15 @@ def generate_and_send_otp(email: str):
         print(f"[auth] SMTP not configured. OTP for {email}: {otp}")
         return
 
-    msg = MIMEText(f"Your GST Audit Assistant verification code is: {otp}\n\nValid for 10 minutes.")
-    msg["Subject"] = "Verify your email — GST Audit Assistant"
-    msg["From"] = SMTP_EMAIL
+    msg = MIMEText(
+        f"Hi,\n\n"
+        f"Your verification code for GST Audit Assistant is: {otp}\n\n"
+        f"This code is valid for 10 minutes. If you did not request this, please ignore this email.\n\n"
+        f"— GST Audit Assistant Team\n"
+        f"Contact: +91-8955377472 · sohailkhan902314@gmail.com"
+    )
+    msg["Subject"] = "Your GST Audit Assistant verification code"
+    msg["From"] = f"GST Audit Assistant <{SMTP_EMAIL}>"
     msg["To"] = email
 
     try:
