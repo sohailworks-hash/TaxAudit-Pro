@@ -5,14 +5,17 @@ FastAPI backend for AI Tax & Document Audit Assistant.
 """
 from io import BytesIO, StringIO
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+import secrets
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 import db
+import auth
 from gst_validator import GSTValidator, gst_flags_to_db_format, ValidationFlag, FlagSeverity
 from gstr_matching import GSTRMatchingEngine, GSTR2BParser, MatchStatus
 from report_generator import generate_audit_pdf
+from pydantic import BaseModel
 from schemas import (
     InvoiceValidateRequest, InvoiceValidateResponse,
     GSTRMatchRequest, GSTRMatchResponse, MatchResultOut,
@@ -43,11 +46,67 @@ def health():
 
 
 # ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class AdminUnlockRequest(BaseModel):
+    email: str
+    admin_key: str
+
+
+@app.post("/api/v1/auth/signup")
+def signup(payload: SignupRequest):
+    if db.get_user_by_email(payload.email):
+        raise HTTPException(status_code=400, detail="Email already registered.")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    db.create_user(payload.email, auth.hash_password(payload.password))
+    user = db.get_user_by_email(payload.email)
+    token = secrets.token_hex(24)
+    db.create_session(token, user["id"])
+    return {"token": token, "email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"]}
+
+
+@app.post("/api/v1/auth/login")
+def login(payload: LoginRequest):
+    user = db.get_user_by_email(payload.email)
+    if not user or not auth.verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    token = secrets.token_hex(24)
+    db.create_session(token, user["id"])
+    return {"token": token, "email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"]}
+
+
+@app.get("/api/v1/auth/me")
+def me(user: dict = Depends(auth.get_current_user)):
+    return {"email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"],
+            "trial_limit": auth.FREE_TRIAL_LIMIT}
+
+
+@app.post("/api/v1/admin/unlock")
+def admin_unlock(payload: AdminUnlockRequest):
+    if payload.admin_key != auth.ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Invalid admin key.")
+    if not db.set_user_paid(payload.email, True):
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {"message": f"{payload.email} unlocked successfully."}
+
+
+# ---------------------------------------------------------------------------
 # Single invoice validation
 # ---------------------------------------------------------------------------
 
 @app.post("/api/v1/validate-invoice", response_model=InvoiceValidateResponse)
-def validate_invoice(payload: InvoiceValidateRequest):
+def validate_invoice(payload: InvoiceValidateRequest, user: dict = Depends(auth.get_current_user)):
+    auth.enforce_trial_limit(user)
     try:
         result = GSTValidator.validate_invoice(**payload.model_dump())
     except Exception as e:
@@ -127,8 +186,9 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str) -> GS
 
 
 @app.post("/api/v1/match-gstr", response_model=GSTRMatchResponse)
-def match_gstr(payload: GSTRMatchRequest):
+def match_gstr(payload: GSTRMatchRequest, user: dict = Depends(auth.get_current_user)):
     """Reconciliation via raw JSON payload."""
+    auth.enforce_trial_limit(user)
     return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json")
 
 
@@ -136,8 +196,10 @@ def match_gstr(payload: GSTRMatchRequest):
 async def match_gstr_file(
     purchase_file: UploadFile = File(...),
     gstr2b_file: UploadFile = File(...),
+    user: dict = Depends(auth.get_current_user),
 ):
     """Reconciliation via uploaded CSV or Excel (.xlsx/.xls) files."""
+    auth.enforce_trial_limit(user)
 
     async def parse(file: UploadFile):
         name = (file.filename or "").lower()
@@ -275,8 +337,9 @@ def _summarize_bulk(results: list) -> BulkValidateResponse:
 
 
 @app.post("/api/v1/validate-bulk-invoices", response_model=BulkValidateResponse)
-def validate_bulk_invoices(payload: BulkValidateRequest):
+def validate_bulk_invoices(payload: BulkValidateRequest, user: dict = Depends(auth.get_current_user)):
     """Validates a JSON array of invoices in one call."""
+    auth.enforce_trial_limit(user)
     if not payload.invoices:
         raise HTTPException(status_code=400, detail="No invoices provided.")
 
@@ -339,8 +402,9 @@ def _parse_invoice_file(raw: bytes, filename: str) -> list:
 
 
 @app.post("/api/v1/validate-bulk-invoices-file", response_model=BulkValidateResponse)
-async def validate_bulk_invoices_file(file: UploadFile = File(...)):
+async def validate_bulk_invoices_file(file: UploadFile = File(...), user: dict = Depends(auth.get_current_user)):
     """Validates a batch of invoices uploaded as a CSV or Excel file."""
+    auth.enforce_trial_limit(user)
     try:
         raw = await file.read()
     except Exception as e:
