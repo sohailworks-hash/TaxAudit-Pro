@@ -36,66 +36,47 @@ def init_db():
             )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE, password_hash TEXT,
-                is_paid INTEGER DEFAULT 0, trial_used INTEGER DEFAULT 0,
-                email_verified INTEGER DEFAULT 0, otp TEXT, otp_expiry TEXT,
+            CREATE TABLE IF NOT EXISTS devices (
+                device_id TEXT PRIMARY KEY,
+                trial_used INTEGER DEFAULT 0, is_paid INTEGER DEFAULT 0,
                 created_at TEXT
             )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                token TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT
+            CREATE TABLE IF NOT EXISTS access_codes (
+                code TEXT PRIMARY KEY,
+                used INTEGER DEFAULT 0, used_by_device TEXT,
+                created_at TEXT, used_at TEXT
             )
         """)
 
-def create_user(email: str, password_hash: str):
+def get_or_create_device(device_id: str):
     with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO users (email, password_hash, is_paid, trial_used, created_at) VALUES (?,?,0,0,?)",
-            (email.lower().strip(), password_hash, datetime.utcnow().isoformat())
-        )
+        row = conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        if row:
+            return dict(row)
+        conn.execute("INSERT INTO devices (device_id, trial_used, is_paid, created_at) VALUES (?,0,0,?)",
+                      (device_id, datetime.utcnow().isoformat()))
+        return {"device_id": device_id, "trial_used": 0, "is_paid": 0}
 
-def get_user_by_email(email: str):
+def increment_device_trial(device_id: str):
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
-        return dict(row) if row else None
+        conn.execute("UPDATE devices SET trial_used = trial_used + 1 WHERE device_id = ?", (device_id,))
 
-def get_user_by_token(token: str):
+def redeem_access_code(device_id: str, code: str) -> bool:
     with get_conn() as conn:
-        row = conn.execute("""
-            SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?
-        """, (token,)).fetchone()
-        return dict(row) if row else None
-
-def create_session(token: str, user_id: int):
-    with get_conn() as conn:
-        conn.execute("INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)",
-                      (token, user_id, datetime.utcnow().isoformat()))
-
-def increment_trial_used(user_id: int):
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET trial_used = trial_used + 1 WHERE id = ?", (user_id,))
-
-def set_user_paid(email: str, is_paid: bool = True):
-    with get_conn() as conn:
-        cur = conn.execute("UPDATE users SET is_paid = ? WHERE email = ?", (int(is_paid), email.lower().strip()))
-        return cur.rowcount > 0
-
-def set_otp(email: str, otp: str, expiry_iso: str):
-    with get_conn() as conn:
-        conn.execute("UPDATE users SET otp = ?, otp_expiry = ? WHERE email = ?", (otp, expiry_iso, email.lower().strip()))
-
-def verify_otp_and_activate(email: str, otp: str) -> bool:
-    with get_conn() as conn:
-        row = conn.execute("SELECT otp, otp_expiry FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
-        if not row or row["otp"] != otp:
+        row = conn.execute("SELECT * FROM access_codes WHERE code = ?", (code.strip().upper(),)).fetchone()
+        if not row or row["used"]:
             return False
-        if row["otp_expiry"] < datetime.utcnow().isoformat():
-            return False
-        conn.execute("UPDATE users SET email_verified = 1, otp = NULL, otp_expiry = NULL WHERE email = ?", (email.lower().strip(),))
+        conn.execute("UPDATE access_codes SET used = 1, used_by_device = ?, used_at = ? WHERE code = ?",
+                      (device_id, datetime.utcnow().isoformat(), code.strip().upper()))
+        conn.execute("UPDATE devices SET is_paid = 1 WHERE device_id = ?", (device_id,))
         return True
+
+def generate_access_code(code: str):
+    with get_conn() as conn:
+        conn.execute("INSERT INTO access_codes (code, used, created_at) VALUES (?,0,?)",
+                      (code.strip().upper(), datetime.utcnow().isoformat()))
 
 def log_validation(gstin: str, invoice_number: Optional[str], severity: str,
                     is_valid: bool, tx_type: str, flag_count: int):
