@@ -35,6 +35,52 @@ def init_db():
                 missing_in_gstr2b INTEGER, source TEXT, created_at TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE, password_hash TEXT,
+                is_paid INTEGER DEFAULT 0, trial_used INTEGER DEFAULT 0,
+                created_at TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT
+            )
+        """)
+
+def create_user(email: str, password_hash: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO users (email, password_hash, is_paid, trial_used, created_at) VALUES (?,?,0,0,?)",
+            (email.lower().strip(), password_hash, datetime.utcnow().isoformat())
+        )
+
+def get_user_by_email(email: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
+        return dict(row) if row else None
+
+def get_user_by_token(token: str):
+    with get_conn() as conn:
+        row = conn.execute("""
+            SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?
+        """, (token,)).fetchone()
+        return dict(row) if row else None
+
+def create_session(token: str, user_id: int):
+    with get_conn() as conn:
+        conn.execute("INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)",
+                      (token, user_id, datetime.utcnow().isoformat()))
+
+def increment_trial_used(user_id: int):
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET trial_used = trial_used + 1 WHERE id = ?", (user_id,))
+
+def set_user_paid(email: str, is_paid: bool = True):
+    with get_conn() as conn:
+        cur = conn.execute("UPDATE users SET is_paid = ? WHERE email = ?", (int(is_paid), email.lower().strip()))
+        return cur.rowcount > 0
 
 def log_validation(gstin: str, invoice_number: Optional[str], severity: str,
                     is_valid: bool, tx_type: str, flag_count: int):
