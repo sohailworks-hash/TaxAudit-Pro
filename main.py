@@ -6,6 +6,7 @@ FastAPI backend for AI Tax & Document Audit Assistant.
 from io import BytesIO, StringIO
 
 import secrets
+import re
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -13,7 +14,7 @@ from fastapi.responses import Response
 import db
 import auth
 from gst_validator import GSTValidator, gst_flags_to_db_format, ValidationFlag, FlagSeverity
-from gstr_matching import GSTRMatchingEngine, GSTR2BParser, MatchStatus
+from gstr_matching import GSTRMatchingEngine, GSTR2BParser, MatchStatus, normalize_headers
 from report_generator import generate_audit_pdf
 from pydantic import BaseModel
 from schemas import (
@@ -64,12 +65,15 @@ class AdminUnlockRequest(BaseModel):
 
 @app.post("/api/v1/auth/signup")
 def signup(payload: SignupRequest):
-    if db.get_user_by_email(payload.email):
+    email = payload.email.strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+    if db.get_user_by_email(email):
         raise HTTPException(status_code=400, detail="Email already registered.")
     if len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
-    db.create_user(payload.email, auth.hash_password(payload.password))
-    user = db.get_user_by_email(payload.email)
+    db.create_user(email, auth.hash_password(payload.password))
+    user = db.get_user_by_email(email)
     token = secrets.token_hex(24)
     db.create_session(token, user["id"])
     return {"token": token, "email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"]}
@@ -372,7 +376,7 @@ def _parse_invoice_file(raw: bytes, filename: str) -> list:
     if df is None or df.empty:
         return []
 
-    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+    df.columns = [normalize_headers(df.columns)[c] for c in df.columns]
     if "supplier_gstin" not in df.columns:
         raise HTTPException(status_code=400, detail="File must contain a 'supplier_gstin' column.")
 
