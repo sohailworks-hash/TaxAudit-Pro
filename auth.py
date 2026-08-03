@@ -33,6 +33,6 @@ def enforce_trial_limit(user: dict):
     if user["trial_used"] >= FREE_TRIAL_LIMIT:
         raise HTTPException(
             status_code=402,
-            detail=f"Free trial limit ({FREE_TRIAL_LIMIT} checks) reached. Contact admin to unlock full access.",
+            detail=f"Free trial limit ({FREE_TRIAL_LIMIT} checks) reached. Contact +91-8955377472 or email sohailkhan902314@gmail.com to unlock full access.",
         )
     db.increment_trial_used(user["id"])
