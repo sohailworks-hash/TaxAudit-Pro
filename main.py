@@ -58,6 +58,13 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class VerifyOtpRequest(BaseModel):
+    email: str
+    otp: str
+
+class ResendOtpRequest(BaseModel):
+    email: str
+
 class AdminUnlockRequest(BaseModel):
     email: str
     admin_key: str
@@ -73,10 +80,29 @@ def signup(payload: SignupRequest):
     if len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
     db.create_user(email, auth.hash_password(payload.password))
+    auth.generate_and_send_otp(email)
+    return {"message": "OTP sent to your email. Please verify to continue.", "email": email}
+
+
+@app.post("/api/v1/auth/verify-otp")
+def verify_otp(payload: VerifyOtpRequest):
+    email = payload.email.strip().lower()
+    if not db.verify_otp_and_activate(email, payload.otp.strip()):
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
     user = db.get_user_by_email(email)
     token = secrets.token_hex(24)
     db.create_session(token, user["id"])
     return {"token": token, "email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"]}
+
+
+@app.post("/api/v1/auth/resend-otp")
+def resend_otp(payload: ResendOtpRequest):
+    email = payload.email.strip().lower()
+    user = db.get_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=404, detail="Email not found.")
+    auth.generate_and_send_otp(email)
+    return {"message": "OTP resent."}
 
 
 @app.post("/api/v1/auth/login")
@@ -84,6 +110,9 @@ def login(payload: LoginRequest):
     user = db.get_user_by_email(payload.email)
     if not user or not auth.verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
+    if not user["email_verified"]:
+        auth.generate_and_send_otp(user["email"])
+        raise HTTPException(status_code=403, detail="Email not verified. A new OTP has been sent.")
     token = secrets.token_hex(24)
     db.create_session(token, user["id"])
     return {"token": token, "email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"]}
