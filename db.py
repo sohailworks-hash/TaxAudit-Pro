@@ -40,6 +40,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT UNIQUE, password_hash TEXT,
                 is_paid INTEGER DEFAULT 0, trial_used INTEGER DEFAULT 0,
+                email_verified INTEGER DEFAULT 0, otp TEXT, otp_expiry TEXT,
                 created_at TEXT
             )
         """)
@@ -81,6 +82,20 @@ def set_user_paid(email: str, is_paid: bool = True):
     with get_conn() as conn:
         cur = conn.execute("UPDATE users SET is_paid = ? WHERE email = ?", (int(is_paid), email.lower().strip()))
         return cur.rowcount > 0
+
+def set_otp(email: str, otp: str, expiry_iso: str):
+    with get_conn() as conn:
+        conn.execute("UPDATE users SET otp = ?, otp_expiry = ? WHERE email = ?", (otp, expiry_iso, email.lower().strip()))
+
+def verify_otp_and_activate(email: str, otp: str) -> bool:
+    with get_conn() as conn:
+        row = conn.execute("SELECT otp, otp_expiry FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
+        if not row or row["otp"] != otp:
+            return False
+        if row["otp_expiry"] < datetime.utcnow().isoformat():
+            return False
+        conn.execute("UPDATE users SET email_verified = 1, otp = NULL, otp_expiry = NULL WHERE email = ?", (email.lower().strip(),))
+        return True
 
 def log_validation(gstin: str, invoice_number: Optional[str], severity: str,
                     is_valid: bool, tx_type: str, flag_count: int):
