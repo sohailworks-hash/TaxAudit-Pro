@@ -51,7 +51,10 @@
     <p class="text-xs mb-5" style="color:#7A7263;">3 free checks included. Login to continue.</p>
     <div class="space-y-3">
       <input id="authEmail" type="email" placeholder="Email" class="w-full px-3 py-2 rounded text-sm">
-      <input id="authPassword" type="password" placeholder="Password (min 6 chars)" class="w-full px-3 py-2 rounded text-sm">
+      <div class="relative">
+        <input id="authPassword" type="password" placeholder="Password (min 6 chars)" class="w-full px-3 py-2 pr-16 rounded text-sm">
+        <button type="button" onclick="togglePwd()" id="pwdToggleBtn" class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono font-semibold underline" style="color:var(--accent);">SHOW</button>
+      </div>
     </div>
     <p id="authError" class="text-xs mt-2 hidden" style="color:var(--red);"></p>
     <button id="authSubmitBtn" onclick="submitAuth()" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-4">Login</button>
@@ -280,6 +283,13 @@ const API = 'https://taxaudit-pro.onrender.com';
 
 // ---------- auth ----------
 let authMode = 'login';
+function togglePwd(){
+  const inp = document.getElementById('authPassword');
+  const btn = document.getElementById('pwdToggleBtn');
+  const showing = inp.type === 'text';
+  inp.type = showing ? 'password' : 'text';
+  btn.textContent = showing ? 'SHOW' : 'HIDE';
+}
 function authHeaders(){
   const t = localStorage.getItem('token');
   return t ? {'Authorization': 'Bearer ' + t} : {};
