@@ -47,90 +47,37 @@ def health():
 
 
 # ---------------------------------------------------------------------------
-# Auth
+# Device-based trial + access code system
 # ---------------------------------------------------------------------------
 
-class SignupRequest(BaseModel):
-    email: str
-    password: str
+class RedeemRequest(BaseModel):
+    device_id: str
+    code: str
 
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-class VerifyOtpRequest(BaseModel):
-    email: str
-    otp: str
-
-class ResendOtpRequest(BaseModel):
-    email: str
-
-class AdminUnlockRequest(BaseModel):
-    email: str
+class GenerateCodeRequest(BaseModel):
     admin_key: str
 
 
-@app.post("/api/v1/auth/signup")
-def signup(payload: SignupRequest):
-    email = payload.email.strip().lower()
-    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-    if db.get_user_by_email(email):
-        raise HTTPException(status_code=400, detail="Email already registered.")
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
-    db.create_user(email, auth.hash_password(payload.password))
-    auth.generate_and_send_otp(email)
-    return {"message": "OTP sent to your email. Please verify to continue.", "email": email}
+@app.get("/api/v1/device/status")
+def device_status(device: dict = Depends(auth.get_device)):
+    return {"device_id": device["device_id"], "is_paid": bool(device["is_paid"]),
+            "trial_used": device["trial_used"], "trial_limit": auth.FREE_TRIAL_LIMIT}
 
 
-@app.post("/api/v1/auth/verify-otp")
-def verify_otp(payload: VerifyOtpRequest):
-    email = payload.email.strip().lower()
-    if not db.verify_otp_and_activate(email, payload.otp.strip()):
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
-    user = db.get_user_by_email(email)
-    token = secrets.token_hex(24)
-    db.create_session(token, user["id"])
-    return {"token": token, "email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"]}
+@app.post("/api/v1/access/redeem")
+def redeem_code(payload: RedeemRequest):
+    if not db.redeem_access_code(payload.device_id, payload.code):
+        raise HTTPException(status_code=400, detail="Invalid or already-used access code.")
+    return {"message": "Access unlocked successfully."}
 
 
-@app.post("/api/v1/auth/resend-otp")
-def resend_otp(payload: ResendOtpRequest):
-    email = payload.email.strip().lower()
-    user = db.get_user_by_email(email)
-    if not user:
-        raise HTTPException(status_code=404, detail="Email not found.")
-    auth.generate_and_send_otp(email)
-    return {"message": "OTP resent."}
-
-
-@app.post("/api/v1/auth/login")
-def login(payload: LoginRequest):
-    user = db.get_user_by_email(payload.email)
-    if not user or not auth.verify_password(payload.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    if not user["email_verified"]:
-        auth.generate_and_send_otp(user["email"])
-        raise HTTPException(status_code=403, detail="Email not verified. A new OTP has been sent.")
-    token = secrets.token_hex(24)
-    db.create_session(token, user["id"])
-    return {"token": token, "email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"]}
-
-
-@app.get("/api/v1/auth/me")
-def me(user: dict = Depends(auth.get_current_user)):
-    return {"email": user["email"], "is_paid": bool(user["is_paid"]), "trial_used": user["trial_used"],
-            "trial_limit": auth.FREE_TRIAL_LIMIT}
-
-
-@app.post("/api/v1/admin/unlock")
-def admin_unlock(payload: AdminUnlockRequest):
+@app.post("/api/v1/admin/generate-code")
+def admin_generate_code(payload: GenerateCodeRequest):
     if payload.admin_key != auth.ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Invalid admin key.")
-    if not db.set_user_paid(payload.email, True):
-        raise HTTPException(status_code=404, detail="User not found.")
-    return {"message": f"{payload.email} unlocked successfully."}
+    code = auth.generate_code()
+    db.generate_access_code(code)
+    return {"code": code}
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +85,8 @@ def admin_unlock(payload: AdminUnlockRequest):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/v1/validate-invoice", response_model=InvoiceValidateResponse)
-def validate_invoice(payload: InvoiceValidateRequest, user: dict = Depends(auth.get_current_user)):
-    auth.enforce_trial_limit(user)
+def validate_invoice(payload: InvoiceValidateRequest, device: dict = Depends(auth.get_device)):
+    auth.enforce_trial_limit(device)
     try:
         result = GSTValidator.validate_invoice(**payload.model_dump())
     except Exception as e:
@@ -219,9 +166,9 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str) -> GS
 
 
 @app.post("/api/v1/match-gstr", response_model=GSTRMatchResponse)
-def match_gstr(payload: GSTRMatchRequest, user: dict = Depends(auth.get_current_user)):
+def match_gstr(payload: GSTRMatchRequest, device: dict = Depends(auth.get_device)):
     """Reconciliation via raw JSON payload."""
-    auth.enforce_trial_limit(user)
+    auth.enforce_trial_limit(device)
     return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json")
 
 
@@ -229,10 +176,10 @@ def match_gstr(payload: GSTRMatchRequest, user: dict = Depends(auth.get_current_
 async def match_gstr_file(
     purchase_file: UploadFile = File(...),
     gstr2b_file: UploadFile = File(...),
-    user: dict = Depends(auth.get_current_user),
+    device: dict = Depends(auth.get_device),
 ):
     """Reconciliation via uploaded CSV or Excel (.xlsx/.xls) files."""
-    auth.enforce_trial_limit(user)
+    auth.enforce_trial_limit(device)
 
     async def parse(file: UploadFile):
         name = (file.filename or "").lower()
@@ -370,9 +317,9 @@ def _summarize_bulk(results: list) -> BulkValidateResponse:
 
 
 @app.post("/api/v1/validate-bulk-invoices", response_model=BulkValidateResponse)
-def validate_bulk_invoices(payload: BulkValidateRequest, user: dict = Depends(auth.get_current_user)):
+def validate_bulk_invoices(payload: BulkValidateRequest, device: dict = Depends(auth.get_device)):
     """Validates a JSON array of invoices in one call."""
-    auth.enforce_trial_limit(user)
+    auth.enforce_trial_limit(device)
     if not payload.invoices:
         raise HTTPException(status_code=400, detail="No invoices provided.")
 
@@ -435,9 +382,9 @@ def _parse_invoice_file(raw: bytes, filename: str) -> list:
 
 
 @app.post("/api/v1/validate-bulk-invoices-file", response_model=BulkValidateResponse)
-async def validate_bulk_invoices_file(file: UploadFile = File(...), user: dict = Depends(auth.get_current_user)):
+async def validate_bulk_invoices_file(file: UploadFile = File(...), device: dict = Depends(auth.get_device)):
     """Validates a batch of invoices uploaded as a CSV or Excel file."""
-    auth.enforce_trial_limit(user)
+    auth.enforce_trial_limit(device)
     try:
         raw = await file.read()
     except Exception as e:
