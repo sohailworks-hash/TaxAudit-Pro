@@ -44,6 +44,24 @@
 </head>
 <body class="min-h-screen">
 
+<!-- ============ AUTH OVERLAY ============ -->
+<div id="authOverlay" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(16,24,32,.55);">
+  <div class="card rounded-lg p-8 w-full max-w-sm mx-4">
+    <h2 class="font-display font-semibold text-lg mb-1" id="authTitle">Login</h2>
+    <p class="text-xs mb-5" style="color:#7A7263;">3 free checks included. Login to continue.</p>
+    <div class="space-y-3">
+      <input id="authEmail" type="email" placeholder="Email" class="w-full px-3 py-2 rounded text-sm">
+      <input id="authPassword" type="password" placeholder="Password (min 6 chars)" class="w-full px-3 py-2 rounded text-sm">
+    </div>
+    <p id="authError" class="text-xs mt-2 hidden" style="color:var(--red);"></p>
+    <button id="authSubmitBtn" onclick="submitAuth()" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-4">Login</button>
+    <p class="text-xs text-center mt-4" style="color:#7A7263;">
+      <span id="authSwitchText">New here?</span>
+      <button onclick="toggleAuthMode()" class="font-medium underline" id="authSwitchBtn" style="color:var(--accent);">Sign up</button>
+    </p>
+  </div>
+</div>
+
 <header class="border-b" style="border-color:var(--line);">
   <div class="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
     <div class="flex items-center gap-3">
@@ -53,7 +71,9 @@
         <p class="text-xs mt-0.5" style="color:#7A7263;">Invoice validation &amp; GSTR-2B reconciliation</p>
       </div>
     </div>
-    <div class="flex items-center gap-2 text-xs font-mono">
+    <div class="flex items-center gap-4 text-xs font-mono">
+      <span id="userBadge" class="hidden" style="color:#7A7263;"></span>
+      <button id="logoutBtn" onclick="logout()" class="hidden underline" style="color:var(--accent);">Logout</button>
       <span id="statusDot" class="w-2 h-2 rounded-full inline-block" style="background:#B5451B;"></span>
       <span id="statusText" style="color:#7A7263;">checking backend…</span>
     </div>
@@ -258,6 +278,68 @@
 <script>
 const API = 'https://taxaudit-pro.onrender.com';
 
+// ---------- auth ----------
+let authMode = 'login';
+function authHeaders(){
+  const t = localStorage.getItem('token');
+  return t ? {'Authorization': 'Bearer ' + t} : {};
+}
+function toggleAuthMode(){
+  authMode = authMode === 'login' ? 'signup' : 'login';
+  document.getElementById('authTitle').textContent = authMode === 'login' ? 'Login' : 'Sign up';
+  document.getElementById('authSubmitBtn').textContent = authMode === 'login' ? 'Login' : 'Create account';
+  document.getElementById('authSwitchText').textContent = authMode === 'login' ? 'New here?' : 'Already have an account?';
+  document.getElementById('authSwitchBtn').textContent = authMode === 'login' ? 'Sign up' : 'Login';
+  document.getElementById('authError').classList.add('hidden');
+}
+async function submitAuth(){
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const errEl = document.getElementById('authError');
+  errEl.classList.add('hidden');
+  if(!email || !password){ errEl.textContent = 'Please fill both fields.'; errEl.classList.remove('hidden'); return; }
+  try{
+    const res = await fetch(API + '/api/v1/auth/' + authMode, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password})
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Failed');
+    localStorage.setItem('token', data.token);
+    onLoginSuccess(data);
+  }catch(err){
+    errEl.textContent = err.message; errEl.classList.remove('hidden');
+  }
+}
+function onLoginSuccess(data){
+  document.getElementById('authOverlay').classList.add('hidden');
+  document.getElementById('logoutBtn').classList.remove('hidden');
+  const badge = document.getElementById('userBadge');
+  badge.classList.remove('hidden');
+  badge.textContent = `${data.email} · ${data.is_paid ? 'PAID' : (auth_limit_text(data))}`;
+}
+function auth_limit_text(data){
+  const limit = data.trial_limit || 3;
+  return `${data.trial_used}/${limit} free checks used`;
+}
+function logout(){
+  localStorage.removeItem('token');
+  location.reload();
+}
+async function checkSession(){
+  const token = localStorage.getItem('token');
+  if(!token){ document.getElementById('authOverlay').classList.remove('hidden'); return; }
+  try{
+    const res = await fetch(API + '/api/v1/auth/me', { headers: authHeaders() });
+    if(!res.ok) throw new Error();
+    const data = await res.json();
+    onLoginSuccess(data);
+  }catch(e){
+    localStorage.removeItem('token');
+    document.getElementById('authOverlay').classList.remove('hidden');
+  }
+}
+checkSession();
+
 // ---------- health check ----------
 fetch(API + '/api/v1/health').then(r=>{
   if(r.ok){ document.getElementById('statusDot').style.background='#1E6B4E'; document.getElementById('statusText').textContent='backend online'; }
@@ -324,7 +406,7 @@ document.getElementById('validateForm').addEventListener('submit', async (e)=>{
 
   try{
     const res = await fetch(API + '/api/v1/validate-invoice', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify(payload)
     });
     const data = await res.json();
     if(!res.ok){ throw new Error(data.detail || 'Validation failed'); }
@@ -408,7 +490,7 @@ async function runMatchCsv(){
   fd.append('gstr2b_file', gFile);
 
   try{
-    const res = await fetch(API + '/api/v1/match-gstr-file', { method:'POST', body: fd });
+    const res = await fetch(API + '/api/v1/match-gstr-file', { method:'POST', headers: authHeaders(), body: fd });
     const data = await res.json();
     if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
     renderMatchResult(data);
@@ -440,7 +522,7 @@ async function runMatch(){
 
   try{
     const res = await fetch(API + '/api/v1/match-gstr', {
-      method:'POST', headers:{'Content-Type':'application/json'},
+      method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()},
       body: JSON.stringify({purchase_invoices: purchase, gstr2b_invoices: gstr2b})
     });
     const data = await res.json();
@@ -509,7 +591,7 @@ async function runBulkJson(){
 
   try{
     const res = await fetch(API + '/api/v1/validate-bulk-invoices', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({invoices})
+      method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({invoices})
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.detail || 'Bulk validation failed');
@@ -531,7 +613,7 @@ async function runBulkFile(){
 
   const fd = new FormData(); fd.append('file', file);
   try{
-    const res = await fetch(API + '/api/v1/validate-bulk-invoices-file', { method:'POST', body: fd });
+    const res = await fetch(API + '/api/v1/validate-bulk-invoices-file', { method:'POST', headers: authHeaders(), body: fd });
     const data = await res.json();
     if(!res.ok) throw new Error(data.detail || 'Bulk validation failed');
     renderBulkResult(data);
