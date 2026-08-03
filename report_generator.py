@@ -1,10 +1,12 @@
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 SEV_COLORS = {
     "GREEN": colors.HexColor("#1E6B4E"),
@@ -23,7 +25,7 @@ def generate_audit_pdf(firm_name: str, client_name: str, results: list, summary:
     elems = [
         Paragraph(firm_name or "GST Audit Assistant", title_style),
         Paragraph(
-            f"Client: {client_name or '—'} · Generated: {datetime.now().strftime('%d-%b-%Y %H:%M')}",
+            f"Client: {client_name or '—'} · Generated: {datetime.now(IST).strftime('%d-%b-%Y %H:%M')} IST",
             sub_style,
         ),
     ]
