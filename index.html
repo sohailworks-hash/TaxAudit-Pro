@@ -47,21 +47,32 @@
 <!-- ============ AUTH OVERLAY ============ -->
 <div id="authOverlay" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(16,24,32,.55);">
   <div class="card rounded-lg p-8 w-full max-w-sm mx-4">
-    <h2 class="font-display font-semibold text-lg mb-1" id="authTitle">Login</h2>
-    <p class="text-xs mb-5" style="color:#7A7263;">3 free checks included. Login to continue.</p>
-    <div class="space-y-3">
-      <input id="authEmail" type="email" placeholder="Email" class="w-full px-3 py-2 rounded text-sm">
-      <div class="relative">
-        <input id="authPassword" type="password" placeholder="Password (min 6 chars)" class="w-full px-3 py-2 pr-16 rounded text-sm">
-        <button type="button" onclick="togglePwd()" id="pwdToggleBtn" class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono font-semibold underline" style="color:var(--accent);">SHOW</button>
+    <div id="authFormBlock">
+      <h2 class="font-display font-semibold text-lg mb-1" id="authTitle">Login</h2>
+      <p class="text-xs mb-5" style="color:#7A7263;">3 free checks included. Login to continue.</p>
+      <div class="space-y-3">
+        <input id="authEmail" type="email" placeholder="Email" class="w-full px-3 py-2 rounded text-sm">
+        <div class="relative">
+          <input id="authPassword" type="password" placeholder="Password (min 6 chars)" class="w-full px-3 py-2 pr-16 rounded text-sm">
+          <button type="button" onclick="togglePwd()" id="pwdToggleBtn" class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono font-semibold underline" style="color:var(--accent);">SHOW</button>
+        </div>
       </div>
+      <p id="authError" class="text-xs mt-2 hidden" style="color:var(--red);"></p>
+      <button id="authSubmitBtn" onclick="submitAuth()" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-4">Login</button>
+      <p class="text-xs text-center mt-4" style="color:#7A7263;">
+        <span id="authSwitchText">New here?</span>
+        <button onclick="toggleAuthMode()" class="font-medium underline" id="authSwitchBtn" style="color:var(--accent);">Sign up</button>
+      </p>
     </div>
-    <p id="authError" class="text-xs mt-2 hidden" style="color:var(--red);"></p>
-    <button id="authSubmitBtn" onclick="submitAuth()" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-4">Login</button>
-    <p class="text-xs text-center mt-4" style="color:#7A7263;">
-      <span id="authSwitchText">New here?</span>
-      <button onclick="toggleAuthMode()" class="font-medium underline" id="authSwitchBtn" style="color:var(--accent);">Sign up</button>
-    </p>
+
+    <div id="otpBlock" class="hidden">
+      <h2 class="font-display font-semibold text-lg mb-1">Verify your email</h2>
+      <p class="text-xs mb-5" style="color:#7A7263;">Enter the 6-digit code sent to <span id="otpEmailLabel" class="font-mono"></span>.</p>
+      <input id="otpInput" maxlength="6" placeholder="123456" class="w-full px-3 py-2 rounded text-sm font-mono text-center tracking-widest text-lg">
+      <p id="otpError" class="text-xs mt-2 hidden" style="color:var(--red);"></p>
+      <button onclick="submitOtp()" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-4">Verify</button>
+      <button onclick="resendOtp()" class="text-xs underline mt-3 block mx-auto" style="color:var(--accent);">Resend code</button>
+    </div>
   </div>
 </div>
 
@@ -302,6 +313,7 @@ function toggleAuthMode(){
   document.getElementById('authSwitchBtn').textContent = authMode === 'login' ? 'Sign up' : 'Login';
   document.getElementById('authError').classList.add('hidden');
 }
+let pendingEmail = '';
 async function submitAuth(){
   const email = document.getElementById('authEmail').value.trim();
   const password = document.getElementById('authPassword').value;
@@ -313,12 +325,48 @@ async function submitAuth(){
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password})
     });
     const data = await res.json();
-    if(!res.ok) throw new Error(data.detail || 'Failed');
+    if(!res.ok){
+      if(res.status === 403 && data.detail && data.detail.includes('not verified')){
+        showOtpStep(email); return;
+      }
+      throw new Error(data.detail || 'Failed');
+    }
+    if(authMode === 'signup'){ showOtpStep(email); return; }
     localStorage.setItem('token', data.token);
     onLoginSuccess(data);
   }catch(err){
     errEl.textContent = err.message; errEl.classList.remove('hidden');
   }
+}
+function showOtpStep(email){
+  pendingEmail = email;
+  document.getElementById('authFormBlock').classList.add('hidden');
+  document.getElementById('otpBlock').classList.remove('hidden');
+  document.getElementById('otpEmailLabel').textContent = email;
+}
+async function submitOtp(){
+  const otp = document.getElementById('otpInput').value.trim();
+  const errEl = document.getElementById('otpError');
+  errEl.classList.add('hidden');
+  try{
+    const res = await fetch(API + '/api/v1/auth/verify-otp', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email: pendingEmail, otp})
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Verification failed');
+    localStorage.setItem('token', data.token);
+    onLoginSuccess(data);
+  }catch(err){
+    errEl.textContent = err.message; errEl.classList.remove('hidden');
+  }
+}
+async function resendOtp(){
+  try{
+    await fetch(API + '/api/v1/auth/resend-otp', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email: pendingEmail})
+    });
+    alert('OTP resent to ' + pendingEmail);
+  }catch(e){ alert('Could not resend OTP.'); }
 }
 function onLoginSuccess(data){
   document.getElementById('authOverlay').classList.add('hidden');
