@@ -10,6 +10,51 @@ from enum import Enum
 from typing import Optional, Any, List, Dict
 
 
+# ---------------------------------------------------------------------------
+# Column header normalization — lets users upload CSV/Excel with any
+# reasonable column naming and still have it map to our canonical fields.
+# ---------------------------------------------------------------------------
+COLUMN_ALIASES = {
+    "invoice_number": ["invoiceno", "invoicenum", "invno", "invnumber", "billno", "billnumber", "invoice", "invoiceid", "docno", "documentnumber"],
+    "supplier_gstin": ["gstin", "suppliergst", "vendorgstin", "sellergstin", "gstno", "gstnumber", "gst", "supplierid"],
+    "buyer_gstin": ["buyergst", "customergstin", "recipientgstin"],
+    "tax_amount": ["taxamt", "taxvalue", "gstamount", "totaltax", "taxtotal", "amount", "invoicetax"],
+    "taxable_amount": ["taxable", "taxablevalue", "basicamount", "baseamount", "netamount", "assessablevalue"],
+    "cgst_amount": ["cgst", "cgstamt", "cgstvalue"],
+    "sgst_amount": ["sgst", "sgstamt", "sgstvalue"],
+    "igst_amount": ["igst", "igstamt", "igstvalue"],
+    "place_of_supply_code": ["placeofsupply", "pos", "supplyplace", "poscode"],
+    "seller_state_code": ["sellerstate", "supplierstate", "statecode"],
+    "buyer_state_code": ["buyerstate", "customerstate"],
+    "item_tax_rate": ["taxrate", "rate", "gstrate", "itemtaxrate"],
+}
+_ALIAS_LOOKUP = {}
+for canonical, aliases in COLUMN_ALIASES.items():
+    _ALIAS_LOOKUP[canonical] = canonical
+    for a in aliases:
+        _ALIAS_LOOKUP[a] = canonical
+
+
+def _normalize_key(k: str) -> str:
+    return str(k).strip().lower().replace(" ", "").replace("_", "").replace("-", "").replace(".", "").replace("#", "")
+
+
+def normalize_headers(keys) -> Dict[str, str]:
+    """Maps raw column headers to canonical field names where recognized.
+    Unrecognized columns are kept as-is (normalized to snake_case)."""
+    mapping = {}
+    for k in keys:
+        norm = _normalize_key(k)
+        canonical = _ALIAS_LOOKUP.get(norm)
+        mapping[k] = canonical if canonical else str(k).strip().lower().replace(" ", "_")
+    return mapping
+
+
+def remap_row(row: dict) -> dict:
+    mapping = normalize_headers(row.keys())
+    return {mapping[k]: v for k, v in row.items()}
+
+
 class MatchStatus(str, Enum):
     MATCHED = "MATCHED"
     MISMATCHED = "MISMATCHED"
@@ -43,11 +88,12 @@ class GSTR2BParser:
 
     @staticmethod
     def parse_csv(file_content: str) -> List[Dict[str, Any]]:
-        """Parses GSTR-2B data from CSV format."""
+        """Parses GSTR-2B data from CSV format. Accepts flexible column names."""
         invoices = []
         try:
             reader = csv.DictReader(file_content.splitlines())
             for row in reader:
+                row = remap_row(row)
                 if row.get("supplier_gstin"):
                     invoices.append(row)
         except Exception:
@@ -75,7 +121,7 @@ class GSTR2BParser:
             return []
 
         try:
-            df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+            df.columns = [normalize_headers(df.columns)[c] for c in df.columns]
             if "invoice_number" not in df.columns or "supplier_gstin" not in df.columns:
                 return []
 
