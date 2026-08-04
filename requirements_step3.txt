@@ -2,6 +2,7 @@ fastapi
 uvicorn
 python-multipart
 openpyxl==3.1.2
-pandas
 aiofiles==23.2.1
 reportlab
+pandas==2.1.4
+numpy==1.26.4
