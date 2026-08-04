@@ -5,6 +5,7 @@ GSTR-2B Matching Engine for AI Tax & Document Audit Assistant
 """
 import csv
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Any, List, Dict
@@ -12,21 +13,46 @@ from typing import Optional, Any, List, Dict
 
 # ---------------------------------------------------------------------------
 # Column header normalization — lets users upload CSV/Excel with any
-# reasonable column naming and still have it map to our canonical fields.
+# reasonable column naming (including real GSTR-2B portal exports and
+# Tally purchase register exports) and still have it map to our canonical
+# fields.
 # ---------------------------------------------------------------------------
 COLUMN_ALIASES = {
-    "invoice_number": ["invoiceno", "invoicenum", "invno", "invnumber", "billno", "billnumber", "invoice", "invoiceid", "docno", "documentnumber"],
-    "supplier_gstin": ["gstin", "suppliergst", "vendorgstin", "sellergstin", "gstno", "gstnumber", "gst", "supplierid"],
+    "invoice_number": [
+        "invoiceno", "invoicenum", "invno", "invnumber", "billno", "billnumber",
+        "invoice", "invoiceid", "docno", "documentnumber", "invoicenumber",
+        "supplierinvoiceno", "supplierinvoicenumber",
+    ],
+    "supplier_gstin": [
+        "gstin", "suppliergst", "vendorgstin", "sellergstin", "gstno", "gstnumber",
+        "gst", "supplierid", "gstinofsupplier", "gstinuin",
+    ],
     "buyer_gstin": ["buyergst", "customergstin", "recipientgstin"],
     "tax_amount": ["taxamt", "taxvalue", "gstamount", "totaltax", "taxtotal", "amount", "invoicetax"],
     "taxable_amount": ["taxable", "taxablevalue", "basicamount", "baseamount", "netamount", "assessablevalue"],
-    "cgst_amount": ["cgst", "cgstamt", "cgstvalue"],
-    "sgst_amount": ["sgst", "sgstamt", "sgstvalue"],
-    "igst_amount": ["igst", "igstamt", "igstvalue"],
+    "cgst_amount": ["cgst", "cgstamt", "cgstvalue", "centraltax"],
+    "sgst_amount": ["sgst", "sgstamt", "sgstvalue", "stateuttax", "sgstutgst"],
+    "igst_amount": ["igst", "igstamt", "igstvalue", "integratedtax"],
+    "cess_amount": ["cess", "cessamt", "cessvalue"],
     "place_of_supply_code": ["placeofsupply", "pos", "supplyplace", "poscode"],
     "seller_state_code": ["sellerstate", "supplierstate", "statecode"],
     "buyer_state_code": ["buyerstate", "customerstate"],
-    "item_tax_rate": ["taxrate", "rate", "gstrate", "itemtaxrate"],
+    "item_tax_rate": ["taxrate", "rate", "gstrate", "itemtaxrate", "applicableoftaxrate", "taxrateapplicable"],
+    "supplier_name": ["tradelegalname", "supplier", "particulars", "suppliername", "vendorname", "partyname"],
+    "invoice_date": ["invoicedate", "supplierinvoicedate", "billdate"],
+    "invoice_type": ["invoicetype"],
+    "invoice_value": ["invoicevalue"],
+    "reverse_charge": ["supplyattractreversecharge", "reversecharge", "rcm"],
+    "return_period": ["gstr11aiffgstr5period", "returnperiod", "period"],
+    "filing_date": ["gstr11aiffgstr5filingdate", "filingdate"],
+    "itc_availability": ["itcavailability"],
+    "itc_reason": ["reason"],
+    "source": ["source"],
+    "voucher_type": ["vouchertype"],
+    "voucher_number": ["voucherno", "vouchernumber"],
+    "voucher_date": ["date"],
+    "gross_total": ["grosstotal"],
+    "addl_cost": ["addlcost", "additionalcost"],
 }
 _ALIAS_LOOKUP = {}
 for canonical, aliases in COLUMN_ALIASES.items():
@@ -36,7 +62,8 @@ for canonical, aliases in COLUMN_ALIASES.items():
 
 
 def _normalize_key(k: str) -> str:
-    return str(k).strip().lower().replace(" ", "").replace("_", "").replace("-", "").replace(".", "").replace("#", "")
+    """Lowercase and strip ALL non-alphanumeric chars (spaces, ₹, /, (), ., #, -)."""
+    return re.sub(r"[^a-z0-9]", "", str(k).strip().lower())
 
 
 def normalize_headers(keys) -> Dict[str, str]:
@@ -53,6 +80,32 @@ def normalize_headers(keys) -> Dict[str, str]:
 def remap_row(row: dict) -> dict:
     mapping = normalize_headers(row.keys())
     return {mapping[k]: v for k, v in row.items()}
+
+
+def _derive_amounts(df):
+    """Fills tax_amount / taxable_amount from split IGST/CGST/SGST/Cess
+    columns when the source file (e.g. real GSTR-2B or Tally exports)
+    doesn't give a single combined column."""
+    import pandas as pd
+
+    tax_parts = [c for c in ["igst_amount", "cgst_amount", "sgst_amount", "cess_amount"] if c in df.columns]
+    for c in tax_parts:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+
+    if "tax_amount" not in df.columns and tax_parts:
+        df["tax_amount"] = df[tax_parts].sum(axis=1)
+    elif "tax_amount" in df.columns:
+        df["tax_amount"] = pd.to_numeric(df["tax_amount"], errors="coerce").fillna(0.0)
+
+    # Tally exports sometimes only give "Gross Total" (taxable + tax) with
+    # no clean taxable-value column -> derive it.
+    if "taxable_amount" not in df.columns and "gross_total" in df.columns and tax_parts:
+        gross = pd.to_numeric(df["gross_total"], errors="coerce").fillna(0.0)
+        df["taxable_amount"] = gross - df[tax_parts].sum(axis=1)
+    elif "taxable_amount" in df.columns:
+        df["taxable_amount"] = pd.to_numeric(df["taxable_amount"], errors="coerce")
+
+    return df
 
 
 class MatchStatus(str, Enum):
@@ -101,40 +154,72 @@ class GSTR2BParser:
         return invoices
 
     @staticmethod
+    def _find_header_row(raw_df) -> Optional[int]:
+        """Scans the first ~20 rows of a headerless sheet to find the real
+        header row (handles junk/title rows above the header, common in
+        official GSTR-2B exports)."""
+        max_rows = min(20, len(raw_df))
+        for i in range(max_rows):
+            norm_vals = [_normalize_key(v) for v in raw_df.iloc[i].tolist()]
+            has_gstin = any("gstin" in v for v in norm_vals)
+            has_invno = any(("invoiceno" in v or "invoicenumber" in v) for v in norm_vals)
+            if has_gstin and has_invno:
+                return i
+        return None
+
+    @staticmethod
     def parse_excel(file_bytes: bytes) -> List[Dict[str, Any]]:
-        """Parses GSTR-2B/purchase data from an Excel (.xlsx/.xls) file."""
+        """Parses GSTR-2B/purchase data from an Excel (.xlsx/.xls) file.
+        Handles multi-sheet workbooks (e.g. official GSTR-2B export with a
+        'B2B' sheet) and header rows that aren't on row 1 (junk/title rows
+        above, common in both GSTR-2B and Tally exports)."""
         try:
             import pandas as pd
             from io import BytesIO
         except ImportError:
             return []
 
-        df = None
+        xls = None
         for engine in ("openpyxl", None):
             try:
-                df = pd.read_excel(BytesIO(file_bytes), engine=engine) if engine else pd.read_excel(BytesIO(file_bytes))
+                xls = pd.ExcelFile(BytesIO(file_bytes), engine=engine) if engine else pd.ExcelFile(BytesIO(file_bytes))
                 break
             except Exception:
                 continue
+        if xls is None:
+            return []
+
+        df = None
+        for sheet in xls.sheet_names:
+            try:
+                raw = xls.parse(sheet, header=None)
+            except Exception:
+                continue
+            header_idx = GSTR2BParser._find_header_row(raw)
+            if header_idx is None:
+                continue
+            try:
+                candidate = xls.parse(sheet, header=header_idx)
+            except Exception:
+                continue
+            candidate.columns = [normalize_headers(candidate.columns)[c] for c in candidate.columns]
+            if "invoice_number" in candidate.columns and "supplier_gstin" in candidate.columns:
+                df = candidate
+                break
 
         if df is None or df.empty:
             return []
 
         try:
-            df.columns = [normalize_headers(df.columns)[c] for c in df.columns]
-            if "invoice_number" not in df.columns or "supplier_gstin" not in df.columns:
-                return []
-
             df = df.dropna(subset=["invoice_number", "supplier_gstin"])
-            if "tax_amount" in df.columns:
-                df["tax_amount"] = pd.to_numeric(df["tax_amount"], errors="coerce").fillna(0.0)
+            df = _derive_amounts(df)
 
             records = df.to_dict(orient="records")
             cleaned = []
             for r in records:
                 row = {}
                 for k, v in r.items():
-                    if isinstance(v, float) and k != "tax_amount":
+                    if isinstance(v, float) and k not in ("tax_amount", "taxable_amount"):
                         v = str(int(v)) if v.is_integer() else str(v)
                     elif not isinstance(v, (int, float)):
                         v = str(v).strip()
