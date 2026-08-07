@@ -121,6 +121,10 @@ def _invoice_number_key(inv: Optional[str]) -> str:
     return str(inv).strip().lower()
 
 
+# Anything within ₹2 is treated as normal rounding, not a real mismatch.
+TAX_DIFF_TOLERANCE = 2.0
+
+
 class MatchStatus(str, Enum):
     MATCHED = "MATCHED"
     MISMATCHED = "MISMATCHED"
@@ -202,7 +206,7 @@ class GSTR2BParser:
         if xls is None:
             return []
 
-        df = None
+        all_cleaned = []
         for sheet in xls.sheet_names:
             try:
                 raw = xls.parse(sheet, header=None)
@@ -216,31 +220,33 @@ class GSTR2BParser:
             except Exception:
                 continue
             candidate.columns = [normalize_headers(candidate.columns)[c] for c in candidate.columns]
-            if "invoice_number" in candidate.columns and "supplier_gstin" in candidate.columns:
-                df = candidate
-                break
+            if "invoice_number" not in candidate.columns or "supplier_gstin" not in candidate.columns:
+                continue
 
-        if df is None or df.empty:
-            return []
+            try:
+                df = candidate.dropna(subset=["invoice_number", "supplier_gstin"])
+                if df.empty:
+                    continue
+                df = _derive_amounts(df)
 
-        try:
-            df = df.dropna(subset=["invoice_number", "supplier_gstin"])
-            df = _derive_amounts(df)
+                records = df.to_dict(orient="records")
+                for r in records:
+                    row = {}
+                    for k, v in r.items():
+                        if isinstance(v, float) and k not in ("tax_amount", "taxable_amount"):
+                            v = str(int(v)) if v.is_integer() else str(v)
+                        elif not isinstance(v, (int, float)):
+                            v = str(v).strip()
+                        row[k] = v
+                    if "supplier_gstin" in row:
+                        row["supplier_gstin"] = str(row["supplier_gstin"]).strip().upper()
+                    if "buyer_gstin" in row:
+                        row["buyer_gstin"] = str(row["buyer_gstin"]).strip().upper()
+                    all_cleaned.append(row)
+            except Exception:
+                continue
 
-            records = df.to_dict(orient="records")
-            cleaned = []
-            for r in records:
-                row = {}
-                for k, v in r.items():
-                    if isinstance(v, float) and k not in ("tax_amount", "taxable_amount"):
-                        v = str(int(v)) if v.is_integer() else str(v)
-                    elif not isinstance(v, (int, float)):
-                        v = str(v).strip()
-                    row[k] = v
-                cleaned.append(row)
-            return cleaned
-        except Exception:
-            return []
+        return all_cleaned
 
 
 class GSTRMatchingEngine:
@@ -299,7 +305,7 @@ class GSTRMatchingEngine:
         tax_diff = round(abs(purchase_tax - portal_tax), 2)
 
         discrepancies = []
-        if tax_diff > 0:
+        if tax_diff > TAX_DIFF_TOLERANCE:
             discrepancies.append(f"Tax amount mismatch: Purchase={purchase_tax}, Portal={portal_tax}")
 
         status = MatchStatus.MISMATCHED if discrepancies else MatchStatus.MATCHED
