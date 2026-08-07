@@ -534,12 +534,39 @@ function renderMatchResult(data){
 
   document.getElementById('matchResult').innerHTML = `
     ${summary}
+    <button onclick="downloadMatchPdf()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm">Download Match Report (PDF)</button>
     <div class="card rounded-lg p-6">
       <h4 class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:#7A7263;">Line-by-line</h4>
       ${rows}
     </div>
     ${jsonBox(data)}
   `;
+  window._lastMatchData = data;
+}
+
+async function downloadMatchPdf(){
+  const data = window._lastMatchData;
+  if(!data){ alert('Run a reconciliation first.'); return; }
+  const clientName = prompt('Client name for this report:') || '';
+  const payload = {
+    firm_name: 'GST Audit Assistant',
+    client_name: clientName,
+    summary: {total: data.total, matched: data.matched, mismatched: data.mismatched, missing_in_gstr2b: data.missing_in_gstr2b},
+    results: data.results
+  };
+  try{
+    const res = await fetch(API + '/api/v1/export-match-pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error('PDF generation failed');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'gstr2b_match_report.pdf'; a.click();
+    URL.revokeObjectURL(url);
+  }catch(err){
+    alert('Error: ' + err.message);
+  }
 }
 
 // ---------- bulk validate ----------

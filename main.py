@@ -15,7 +15,7 @@ import db
 import auth
 from gst_validator import GSTValidator, gst_flags_to_db_format, ValidationFlag, FlagSeverity
 from gstr_matching import GSTRMatchingEngine, GSTR2BParser, MatchStatus, normalize_headers
-from report_generator import generate_audit_pdf
+from report_generator import generate_audit_pdf, generate_match_summary_pdf
 from pydantic import BaseModel
 from schemas import (
     InvoiceValidateRequest, InvoiceValidateResponse,
@@ -413,6 +413,20 @@ def export_audit_pdf(payload: PDFExportRequest):
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=gst_audit_report.pdf"},
+    )
+
+
+@app.post("/api/v1/export-match-pdf")
+def export_match_pdf(payload: PDFExportRequest):
+    try:
+        pdf_bytes = generate_match_summary_pdf(payload.firm_name, payload.client_name, payload.results, payload.summary)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {e}")
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=gstr2b_match_report.pdf"},
     )
 
 
