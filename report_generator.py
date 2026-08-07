@@ -134,7 +134,7 @@ def generate_match_summary_pdf(firm_name: str, client_name: str, results: list, 
             r.get("invoice_number") or "—",
             r.get("supplier_gstin", "") or "—",
             (r.get("status", "") or "").replace("_", " "),
-            f"₹{r.get('tax_diff', 0)}" if r.get("tax_diff") else "—",
+            f"Rs.{r.get('tax_diff', 0)}" if r.get("tax_diff") else "—",
             Paragraph(disc_text, styles["Normal"]),
         ])
 
