@@ -27,9 +27,17 @@ from schemas import (
 
 app = FastAPI(title="AI Tax & Document Audit Assistant API", version="1.0.0")
 
+import os
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "ALLOWED_ORIGINS",
+        "https://tax-audit-pro-iota.vercel.app,http://localhost:3000,http://127.0.0.1:5500"
+    ).split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

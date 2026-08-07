@@ -43,6 +43,13 @@ def init_db():
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS ip_trials (
+                ip TEXT PRIMARY KEY,
+                trial_used INTEGER DEFAULT 0,
+                created_at TEXT
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS access_codes (
                 code TEXT PRIMARY KEY,
                 used INTEGER DEFAULT 0, used_by_device TEXT,
@@ -62,6 +69,20 @@ def get_or_create_device(device_id: str):
 def increment_device_trial(device_id: str):
     with get_conn() as conn:
         conn.execute("UPDATE devices SET trial_used = trial_used + 1 WHERE device_id = ?", (device_id,))
+
+def get_ip_trial_count(ip: str) -> int:
+    with get_conn() as conn:
+        row = conn.execute("SELECT trial_used FROM ip_trials WHERE ip = ?", (ip,)).fetchone()
+        return row["trial_used"] if row else 0
+
+def increment_ip_trial(ip: str):
+    with get_conn() as conn:
+        row = conn.execute("SELECT ip FROM ip_trials WHERE ip = ?", (ip,)).fetchone()
+        if row:
+            conn.execute("UPDATE ip_trials SET trial_used = trial_used + 1 WHERE ip = ?", (ip,))
+        else:
+            conn.execute("INSERT INTO ip_trials (ip, trial_used, created_at) VALUES (?,1,?)",
+                          (ip, datetime.utcnow().isoformat()))
 
 def redeem_access_code(device_id: str, code: str) -> bool:
     with get_conn() as conn:
