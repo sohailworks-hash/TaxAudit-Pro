@@ -258,13 +258,29 @@ class GSTRMatchingEngine:
 
         # Fallback: fuzzy match on invoice number (handles FY-prefixed formats
         # like "26-27/0032" on the portal vs "32" in accounting software) as
-        # long as the supplier GSTIN matches exactly.
+        # long as the supplier GSTIN matches exactly. If more than one record
+        # shares the same normalized number (e.g. same serial reused across
+        # years), pick the one whose tax amount is closest to the purchase
+        # invoice's tax amount to avoid a wrong-year false match.
         if not matched_rec:
             inv_key = _invoice_number_key(inv_no)
-            for g2b in gstr2b_invoices:
-                if g2b.get("supplier_gstin") == sup_gstin and _invoice_number_key(g2b.get("invoice_number")) == inv_key:
-                    matched_rec = g2b
-                    break
+            candidates = [
+                g2b for g2b in gstr2b_invoices
+                if g2b.get("supplier_gstin") == sup_gstin and _invoice_number_key(g2b.get("invoice_number")) == inv_key
+            ]
+            if len(candidates) == 1:
+                matched_rec = candidates[0]
+            elif len(candidates) > 1:
+                try:
+                    target_tax = float(purchase_invoice.get("tax_amount", 0.0))
+                except (TypeError, ValueError):
+                    target_tax = 0.0
+                def _tax_gap(c):
+                    try:
+                        return abs(float(c.get("tax_amount", 0.0)) - target_tax)
+                    except (TypeError, ValueError):
+                        return float("inf")
+                matched_rec = min(candidates, key=_tax_gap)
 
         if not matched_rec:
             return MatchResult(
