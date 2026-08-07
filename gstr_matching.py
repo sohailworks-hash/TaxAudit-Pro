@@ -108,6 +108,19 @@ def _derive_amounts(df):
     return df
 
 
+def _invoice_number_key(inv: Optional[str]) -> str:
+    """Normalizes an invoice number for matching so formats like
+    '26-27/0032', '0032', and '32' are all treated as the same invoice
+    (portal exports often prefix invoice numbers with the financial year,
+    while accounting software like Tally often stores just the serial)."""
+    if inv is None:
+        return ""
+    digits_groups = re.findall(r"\d+", str(inv))
+    if digits_groups:
+        return str(int(digits_groups[-1]))  # last numeric run, leading zeros stripped
+    return str(inv).strip().lower()
+
+
 class MatchStatus(str, Enum):
     MATCHED = "MATCHED"
     MISMATCHED = "MISMATCHED"
@@ -242,6 +255,16 @@ class GSTRMatchingEngine:
             if g2b.get("invoice_number") == inv_no and g2b.get("supplier_gstin") == sup_gstin:
                 matched_rec = g2b
                 break
+
+        # Fallback: fuzzy match on invoice number (handles FY-prefixed formats
+        # like "26-27/0032" on the portal vs "32" in accounting software) as
+        # long as the supplier GSTIN matches exactly.
+        if not matched_rec:
+            inv_key = _invoice_number_key(inv_no)
+            for g2b in gstr2b_invoices:
+                if g2b.get("supplier_gstin") == sup_gstin and _invoice_number_key(g2b.get("invoice_number")) == inv_key:
+                    matched_rec = g2b
+                    break
 
         if not matched_rec:
             return MatchResult(
