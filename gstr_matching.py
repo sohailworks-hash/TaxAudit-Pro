@@ -79,7 +79,11 @@ def normalize_headers(keys) -> Dict[str, str]:
 
 def remap_row(row: dict) -> dict:
     mapping = normalize_headers(row.keys())
-    return {mapping[k]: v for k, v in row.items()}
+    remapped = {mapping[k]: v for k, v in row.items()}
+    for gk in ("supplier_gstin", "buyer_gstin"):
+        if remapped.get(gk):
+            remapped[gk] = str(remapped[gk]).strip().upper()
+    return remapped
 
 
 GSTIN_RE = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b")
@@ -97,7 +101,7 @@ def parse_raw_text(text: str) -> List[dict]:
             gstin_match = GSTIN_RE.search(line)
             if not gstin_match:
                 continue
-            gstin = gstin_match.group(0)
+            gstin = gstin_match.group(0).strip().upper()
             inv_match = INV_HINT_RE.search(line)
             invoice_number = inv_match.group(1) if inv_match else None
             if not invoice_number:
@@ -284,16 +288,28 @@ class GSTR2BParser:
         return all_cleaned
 
 
+def _norm_gstin(g) -> str:
+    return str(g).strip().upper() if g else ""
+
+
 class GSTRMatchingEngine:
     @staticmethod
-    def match_invoice(purchase_invoice: Dict[str, Any], gstr2b_invoices: List[Dict[str, Any]]) -> MatchResult:
-        """Matches a single purchase invoice against GSTR-2B records."""
+    def match_invoice(purchase_invoice: Dict[str, Any], gstr2b_invoices: List[Dict[str, Any]],
+                       used_ids: Optional[set] = None) -> MatchResult:
+        """Matches a single purchase invoice against GSTR-2B records.
+        used_ids (optional): set of id(g2b_record) already consumed by an
+        earlier purchase invoice in this run, so one portal record can't be
+        matched twice (double-count) when passed via run_matching()."""
         inv_no = purchase_invoice.get("invoice_number")
-        sup_gstin = purchase_invoice.get("supplier_gstin")
+        sup_gstin = _norm_gstin(purchase_invoice.get("supplier_gstin"))
+        if used_ids is None:
+            used_ids = set()
 
         matched_rec = None
         for g2b in gstr2b_invoices:
-            if g2b.get("invoice_number") == inv_no and g2b.get("supplier_gstin") == sup_gstin:
+            if id(g2b) in used_ids:
+                continue
+            if g2b.get("invoice_number") == inv_no and _norm_gstin(g2b.get("supplier_gstin")) == sup_gstin:
                 matched_rec = g2b
                 break
 
@@ -307,7 +323,8 @@ class GSTRMatchingEngine:
             inv_key = _invoice_number_key(inv_no)
             candidates = [
                 g2b for g2b in gstr2b_invoices
-                if g2b.get("supplier_gstin") == sup_gstin and _invoice_number_key(g2b.get("invoice_number")) == inv_key
+                if id(g2b) not in used_ids and _norm_gstin(g2b.get("supplier_gstin")) == sup_gstin
+                and _invoice_number_key(g2b.get("invoice_number")) == inv_key
             ]
             if len(candidates) == 1:
                 matched_rec = candidates[0]
@@ -356,8 +373,14 @@ class GSTRMatchingEngine:
 
     @staticmethod
     def run_matching(purchase_invoices: List[Dict[str, Any]], gstr2b_invoices: List[Dict[str, Any]]) -> List[MatchResult]:
-        """Runs bulk matching for all purchase invoices against GSTR-2B."""
+        """Runs bulk matching for all purchase invoices against GSTR-2B.
+        Tracks consumed GSTR-2B records so one portal invoice can't be
+        matched to two different purchase invoices."""
         results = []
+        used_ids: set = set()
         for inv in purchase_invoices:
-            results.append(GSTRMatchingEngine.match_invoice(inv, gstr2b_invoices))
+            r = GSTRMatchingEngine.match_invoice(inv, gstr2b_invoices, used_ids)
+            if r.matched_data:
+                used_ids.add(id(r.matched_data))
+            results.append(r)
         return results
