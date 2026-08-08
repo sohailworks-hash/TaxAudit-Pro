@@ -82,6 +82,41 @@ def remap_row(row: dict) -> dict:
     return {mapping[k]: v for k, v in row.items()}
 
 
+GSTIN_RE = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b")
+AMOUNT_RE = re.compile(r"(?:₹|Rs\.?)?\s?([\d,]+\.\d{1,2}|\d{2,})")
+INV_HINT_RE = re.compile(r"(?:inv(?:oice)?\.?\s*(?:no|#|num)?\.?\s*[:\-]?\s*)([A-Za-z0-9\-/]+)", re.I)
+
+
+def parse_raw_text(text: str) -> List[dict]:
+    """Extracts invoice_number, supplier_gstin, tax_amount from freeform pasted
+    text (e.g. copied from GST portal, WhatsApp, or Tally screen). One record
+    per line/block containing a GSTIN. Best-effort — always review before use."""
+    records = []
+    for block in re.split(r"\n\s*\n|\n(?=\S*GSTIN)", text, flags=re.I):
+        for line in [block] + block.split("\n"):
+            gstin_match = GSTIN_RE.search(line)
+            if not gstin_match:
+                continue
+            gstin = gstin_match.group(0)
+            inv_match = INV_HINT_RE.search(line)
+            invoice_number = inv_match.group(1) if inv_match else None
+            if not invoice_number:
+                # fallback: first standalone token before/near GSTIN that looks like an invoice id
+                pre = line[: gstin_match.start()]
+                tok = re.findall(r"[A-Za-z0-9\-/]{2,}", pre)
+                invoice_number = tok[-1] if tok else None
+            amounts_text = line[:gstin_match.start()] + line[gstin_match.end():]
+            amounts = [float(a.replace(",", "")) for a in AMOUNT_RE.findall(amounts_text)]
+            tax_amount = max(amounts) if amounts else None
+            rec = {"invoice_number": invoice_number, "supplier_gstin": gstin}
+            if tax_amount is not None:
+                rec["tax_amount"] = tax_amount
+            if rec not in records:
+                records.append(rec)
+            break  # one record per block, avoid double-count from inner loop
+    return records
+
+
 def _derive_amounts(df):
     """Fills tax_amount / taxable_amount from split IGST/CGST/SGST/Cess
     columns when the source file (e.g. real GSTR-2B or Tally exports)

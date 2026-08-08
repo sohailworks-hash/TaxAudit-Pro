@@ -156,6 +156,25 @@
     <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
       <button onclick="switchMatchMode('json')" id="mmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
       <button onclick="switchMatchMode('csv')" id="mmode-csv" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
+      <button onclick="switchMatchMode('text')" id="mmode-text" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste Text</button>
+    </div>
+
+    <div id="matchModeText" class="hidden grid lg:grid-cols-2 gap-6 mb-6">
+      <div class="card rounded-lg p-6">
+        <h2 class="font-display font-semibold mb-1">Purchase invoices (raw text)</h2>
+        <p class="text-xs mb-3" style="color:#7A7263;">Paste directly from portal, Tally, WhatsApp — GSTIN detected automatically.</p>
+        <textarea id="purchaseText" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false" placeholder="Invoice 32  27AAPFU0939F1ZV  tax 1800.50&#10;Invoice 45  24BAPPT7897A1Z3  amount 4500"></textarea>
+      </div>
+      <div class="card rounded-lg p-6">
+        <h2 class="font-display font-semibold mb-1">GSTR-2B (raw text)</h2>
+        <p class="text-xs mb-3" style="color:#7A7263;">Paste directly from GST portal screen or PDF copy.</p>
+        <textarea id="gstr2bText" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false" placeholder="Invoice 32  27AAPFU0939F1ZV  tax 1800.50"></textarea>
+      </div>
+      <div class="lg:col-span-2">
+        <button id="matchTextBtn" onclick="runMatchText()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
+          Parse &amp; reconcile
+        </button>
+      </div>
     </div>
 
     <div id="matchModeJson" class="grid lg:grid-cols-2 gap-6 mb-6">
@@ -443,11 +462,42 @@ document.getElementById('gstr2bJson').value = JSON.stringify([
 ], null, 2);
 
 function switchMatchMode(mode){
-  ['json','csv'].forEach(m=>{
-    document.getElementById('matchMode'+(m==='json'?'Json':'Csv')).classList.toggle('hidden', m!==mode);
+  ['json','csv','text'].forEach(m=>{
+    const id = m==='json'?'Json':(m==='csv'?'Csv':'Text');
+    document.getElementById('matchMode'+id).classList.toggle('hidden', m!==mode);
     document.getElementById('mmode-'+m).classList.toggle('tab-active', m===mode);
     document.getElementById('mmode-'+m).classList.toggle('tab-inactive', m!==mode);
   });
+}
+
+async function runMatchText(){
+  const btn = document.getElementById('matchTextBtn');
+  const emptyEl = document.getElementById('matchEmpty');
+  const resultEl = document.getElementById('matchResult');
+  const purchase_text = document.getElementById('purchaseText').value.trim();
+  const gstr2b_text = document.getElementById('gstr2bText').value.trim();
+
+  if(!purchase_text || !gstr2b_text){ alert('Paste text in both boxes.'); return; }
+
+  setLoading(btn, true, 'Parse &amp; reconcile');
+  emptyEl.classList.add('hidden');
+  resultEl.classList.remove('hidden');
+  resultEl.innerHTML = '';
+
+  try{
+    const res = await fetch(API + '/api/v1/match-gstr-text', {
+      method:'POST', headers: {...authHeaders(), 'Content-Type':'application/json'},
+      body: JSON.stringify({purchase_text, gstr2b_text})
+    });
+    const data = await res.json();
+    if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
+    renderMatchResult(data);
+  }catch(err){
+    if(err.message.includes("trial limit")) showUnlockOverlay();
+    resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
+  }finally{
+    setLoading(btn, false, 'Parse &amp; reconcile');
+  }
 }
 
 async function runMatchCsv(){

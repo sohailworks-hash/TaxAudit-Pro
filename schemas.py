@@ -48,6 +48,11 @@ class GSTRMatchRequest(BaseModel):
     gstr2b_invoices: List[Dict[str, Any]]
 
 
+class GSTRMatchTextRequest(BaseModel):
+    purchase_text: str
+    gstr2b_text: str
+
+
 class MatchResultOut(BaseModel):
     invoice_number: Optional[str] = None
     supplier_gstin: Optional[str] = None

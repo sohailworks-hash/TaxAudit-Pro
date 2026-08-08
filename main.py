@@ -14,12 +14,13 @@ from fastapi.responses import Response
 import db
 import auth
 from gst_validator import GSTValidator, gst_flags_to_db_format, ValidationFlag, FlagSeverity
+import gstr_matching
 from gstr_matching import GSTRMatchingEngine, GSTR2BParser, MatchStatus, normalize_headers
 from report_generator import generate_audit_pdf, generate_match_summary_pdf
 from pydantic import BaseModel
 from schemas import (
     InvoiceValidateRequest, InvoiceValidateResponse,
-    GSTRMatchRequest, GSTRMatchResponse, MatchResultOut,
+    GSTRMatchRequest, GSTRMatchTextRequest, GSTRMatchResponse, MatchResultOut,
     FlagsToDBRequest, FlagsToDBResponse,
     BulkValidateRequest, BulkValidateResponse, BulkResultItem,
     PDFExportRequest,
@@ -180,6 +181,17 @@ def match_gstr(payload: GSTRMatchRequest, device: dict = Depends(auth.get_device
     """Reconciliation via raw JSON payload."""
     auth.enforce_trial_limit(device)
     return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json")
+
+
+@app.post("/api/v1/match-gstr-text", response_model=GSTRMatchResponse)
+def match_gstr_text(payload: GSTRMatchTextRequest, device: dict = Depends(auth.get_device)):
+    """Reconciliation via pasted freeform text (portal copy-paste, WhatsApp, Tally screen etc.)."""
+    auth.enforce_trial_limit(device)
+    purchase_records = gstr_matching.parse_raw_text(payload.purchase_text)
+    gstr2b_records = gstr_matching.parse_raw_text(payload.gstr2b_text)
+    if not purchase_records or not gstr2b_records:
+        raise HTTPException(status_code=400, detail="Could not detect any GSTIN/invoice records in the pasted text.")
+    return _build_match_response(purchase_records, gstr2b_records, source="text")
 
 
 @app.post("/api/v1/match-gstr-file", response_model=GSTRMatchResponse)
