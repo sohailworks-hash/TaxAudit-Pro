@@ -39,9 +39,18 @@ def init_db():
             CREATE TABLE IF NOT EXISTS devices (
                 device_id TEXT PRIMARY KEY,
                 trial_used INTEGER DEFAULT 0, is_paid INTEGER DEFAULT 0,
+                paid_until TEXT,
                 created_at TEXT
             )
         """)
+        try:
+            conn.execute("ALTER TABLE devices ADD COLUMN paid_until TEXT")
+        except Exception:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE access_codes ADD COLUMN duration_days INTEGER DEFAULT 30")
+        except Exception:
+            pass
         conn.execute("""
             CREATE TABLE IF NOT EXISTS ip_trials (
                 ip TEXT PRIMARY KEY,
@@ -53,6 +62,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS access_codes (
                 code TEXT PRIMARY KEY,
                 used INTEGER DEFAULT 0, used_by_device TEXT,
+                duration_days INTEGER DEFAULT 30,
                 created_at TEXT, used_at TEXT
             )
         """)
@@ -61,10 +71,16 @@ def get_or_create_device(device_id: str):
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
         if row:
-            return dict(row)
-        conn.execute("INSERT INTO devices (device_id, trial_used, is_paid, created_at) VALUES (?,0,0,?)",
+            d = dict(row)
+            # auto-expire: subscription lapsed but is_paid flag still 1
+            if d["is_paid"] and d.get("paid_until"):
+                if datetime.utcnow().isoformat() > d["paid_until"]:
+                    conn.execute("UPDATE devices SET is_paid = 0 WHERE device_id = ?", (device_id,))
+                    d["is_paid"] = 0
+            return d
+        conn.execute("INSERT INTO devices (device_id, trial_used, is_paid, paid_until, created_at) VALUES (?,0,0,NULL,?)",
                       (device_id, datetime.utcnow().isoformat()))
-        return {"device_id": device_id, "trial_used": 0, "is_paid": 0}
+        return {"device_id": device_id, "trial_used": 0, "is_paid": 0, "paid_until": None}
 
 def increment_device_trial(device_id: str):
     with get_conn() as conn:
@@ -85,19 +101,27 @@ def increment_ip_trial(ip: str):
                           (ip, datetime.utcnow().isoformat()))
 
 def redeem_access_code(device_id: str, code: str) -> bool:
+    from datetime import timedelta
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM access_codes WHERE code = ?", (code.strip().upper(),)).fetchone()
         if not row or row["used"]:
             return False
+        duration_days = row["duration_days"] or 30
         conn.execute("UPDATE access_codes SET used = 1, used_by_device = ?, used_at = ? WHERE code = ?",
                       (device_id, datetime.utcnow().isoformat(), code.strip().upper()))
-        conn.execute("UPDATE devices SET is_paid = 1 WHERE device_id = ?", (device_id,))
+        # extend from existing paid_until if still active, else from now
+        existing = conn.execute("SELECT paid_until, is_paid FROM devices WHERE device_id = ?", (device_id,)).fetchone()
+        base = datetime.utcnow()
+        if existing and existing["is_paid"] and existing["paid_until"] and existing["paid_until"] > base.isoformat():
+            base = datetime.fromisoformat(existing["paid_until"])
+        new_until = (base + timedelta(days=duration_days)).isoformat()
+        conn.execute("UPDATE devices SET is_paid = 1, paid_until = ? WHERE device_id = ?", (new_until, device_id))
         return True
 
-def generate_access_code(code: str):
+def generate_access_code(code: str, duration_days: int = 30):
     with get_conn() as conn:
-        conn.execute("INSERT INTO access_codes (code, used, created_at) VALUES (?,0,?)",
-                      (code.strip().upper(), datetime.utcnow().isoformat()))
+        conn.execute("INSERT INTO access_codes (code, used, duration_days, created_at) VALUES (?,0,?,?)",
+                      (code.strip().upper(), duration_days, datetime.utcnow().isoformat()))
 
 def log_validation(gstin: str, invoice_number: Optional[str], severity: str,
                     is_valid: bool, tx_type: str, flag_count: int):

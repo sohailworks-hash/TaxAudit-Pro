@@ -64,11 +64,13 @@ class RedeemRequest(BaseModel):
 
 class GenerateCodeRequest(BaseModel):
     admin_key: str
+    duration_days: int = 30
 
 
 @app.get("/api/v1/device/status")
 def device_status(device: dict = Depends(auth.get_device)):
     return {"device_id": device["device_id"], "is_paid": bool(device["is_paid"]),
+            "paid_until": device.get("paid_until"),
             "trial_used": device["trial_used"], "trial_limit": auth.FREE_TRIAL_LIMIT}
 
 
@@ -84,8 +86,8 @@ def admin_generate_code(payload: GenerateCodeRequest):
     if payload.admin_key != auth.ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Invalid admin key.")
     code = auth.generate_code()
-    db.generate_access_code(code)
-    return {"code": code}
+    db.generate_access_code(code, payload.duration_days)
+    return {"code": code, "duration_days": payload.duration_days}
 
 
 # ---------------------------------------------------------------------------

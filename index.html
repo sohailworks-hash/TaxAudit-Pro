@@ -281,7 +281,9 @@ function authHeaders(){ return {'X-Device-Id': DEVICE_ID}; }
 
 function updateBadge(status){
   const badge = document.getElementById('userBadge');
-  badge.textContent = status.is_paid ? 'PAID ACCOUNT' : `${status.trial_used}/${status.trial_limit} free checks used`;
+  badge.textContent = status.is_paid
+    ? `PAID ACCOUNT${status.paid_until ? ' · valid till ' + status.paid_until.slice(0,10) : ''}`
+    : `${status.trial_used}/${status.trial_limit} free checks used`;
 }
 async function refreshDeviceStatus(){
   try{
