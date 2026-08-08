@@ -257,6 +257,7 @@
         <input id="histSearch" placeholder="Search..." class="w-full px-3 py-2 rounded text-sm font-mono">
       </div>
       <button onclick="loadHistory(0)" class="btn-primary px-4 py-2 rounded font-display font-medium text-sm">Apply filters</button>
+      <button onclick="downloadHistoryCsv()" class="px-4 py-2 rounded font-display font-medium text-sm" style="border:1px solid var(--ink);">Download CSV</button>
     </div>
 
     <div id="histEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
@@ -700,6 +701,26 @@ function switchHistMode(mode){
   document.getElementById('histSeverityWrap').classList.toggle('hidden', mode!=='validations');
   document.getElementById('histSearchWrap').classList.toggle('hidden', mode!=='validations');
   loadHistory(0);
+}
+
+function downloadHistoryCsv(){
+  const dateFrom = document.getElementById('histDateFrom').value;
+  const dateTo = document.getElementById('histDateTo').value;
+  const params = new URLSearchParams();
+  if(dateFrom) params.set('date_from', dateFrom);
+  if(dateTo) params.set('date_to', dateTo);
+
+  let url;
+  if(histMode === 'validations'){
+    const severity = document.getElementById('histSeverity').value;
+    const search = document.getElementById('histSearch').value.trim();
+    if(severity) params.set('severity', severity);
+    if(search) params.set('search', search);
+    url = API + '/api/v1/audit-history/validations/export-csv?' + params.toString();
+  } else {
+    url = API + '/api/v1/audit-history/matches/export-csv?' + params.toString();
+  }
+  window.open(url, '_blank');
 }
 
 async function loadHistory(offset){

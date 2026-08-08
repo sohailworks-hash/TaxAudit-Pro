@@ -463,3 +463,38 @@ def audit_history_matches(limit: int = 20, offset: int = 0, date_from: str = Non
         return {"total": total, "limit": limit, "offset": offset, "results": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not read history: {e}")
+
+
+def _rows_to_csv(rows: list, fieldnames: list) -> str:
+    import csv, io
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        writer.writerow(r)
+    return buf.getvalue()
+
+
+@app.get("/api/v1/audit-history/validations/export-csv")
+def export_validations_csv(severity: str = None, date_from: str = None, date_to: str = None, search: str = None):
+    try:
+        _, rows = db.query_validations(limit=100000, offset=0, severity=severity,
+                                        date_from=date_from, date_to=date_to, search=search)
+        csv_text = _rows_to_csv(rows, ["id", "gstin", "invoice_number", "overall_severity",
+                                        "is_valid", "transaction_type", "flag_count", "created_at"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+    return Response(content=csv_text, media_type="text/csv",
+                     headers={"Content-Disposition": "attachment; filename=validation_history.csv"})
+
+
+@app.get("/api/v1/audit-history/matches/export-csv")
+def export_matches_csv(date_from: str = None, date_to: str = None):
+    try:
+        _, rows = db.query_matches(limit=100000, offset=0, date_from=date_from, date_to=date_to)
+        csv_text = _rows_to_csv(rows, ["id", "total", "matched", "mismatched",
+                                        "missing_in_gstr2b", "source", "created_at"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+    return Response(content=csv_text, media_type="text/csv",
+                     headers={"Content-Disposition": "attachment; filename=match_history.csv"})
