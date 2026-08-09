@@ -364,6 +364,28 @@ class GSTRMatchingEngine:
                         return float("inf")
                 matched_rec = min(candidates, key=_tax_gap)
 
+        # Last-resort fallback: same GSTIN + exact tax amount match, for
+        # cases where invoice-number formats differ too much to normalize
+        # (e.g. purchase '499' vs portal 'SWT2627-499'). Only used when
+        # exactly one such candidate exists, to avoid wrong matches.
+        if not matched_rec:
+            try:
+                target_tax = round(float(purchase_invoice.get("tax_amount", 0.0)), 2)
+            except (TypeError, ValueError):
+                target_tax = None
+            if target_tax is not None:
+                amount_candidates = []
+                for g2b in gstr2b_invoices:
+                    if id(g2b) in used_ids or _norm_gstin(g2b.get("supplier_gstin")) != sup_gstin:
+                        continue
+                    try:
+                        if round(float(g2b.get("tax_amount", 0.0)), 2) == target_tax:
+                            amount_candidates.append(g2b)
+                    except (TypeError, ValueError):
+                        continue
+                if len(amount_candidates) == 1:
+                    matched_rec = amount_candidates[0]
+
         if not matched_rec:
             return MatchResult(
                 invoice_number=inv_no,
