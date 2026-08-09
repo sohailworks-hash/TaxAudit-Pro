@@ -161,16 +161,27 @@ def _derive_amounts(df):
 
 
 def _invoice_number_key(inv: Optional[str]) -> str:
-    """Normalizes an invoice number for matching so formats like
-    '26-27/0032', '0032', and '32' are all treated as the same invoice
-    (portal exports often prefix invoice numbers with the financial year,
-    while accounting software like Tally often stores just the serial)."""
+    """Normalizes an invoice number for matching so real-world portal formats
+    ('26-27/0032', 'T00137/26-27', '019326-27' [serial+FY glued with no
+    separator], 'SHP/149/2026-27', 'SINV-26-02244', 'AHD/002540/SI26') and
+    plain Tally serials ('0032', '32') all resolve to the same key.
+    Strategy: strip an exact trailing financial-year suffix ('YY-YY' or
+    'YYYY-YY') if present, then take the LONGEST remaining digit run (the
+    invoice serial is always longer than a 2-digit FY/branch code) rather
+    than the last one."""
     if inv is None:
         return ""
-    digits_groups = re.findall(r"\d+", str(inv))
+    s = str(inv).strip()
+    core = s
+    if len(core) >= 5 and re.fullmatch(r"\d{2}-\d{2}", core[-5:]):
+        core = core[:-5]
+    elif len(core) >= 7 and re.fullmatch(r"\d{4}-\d{2}", core[-7:]):
+        core = core[:-7]
+    digits_groups = re.findall(r"\d+", core) or re.findall(r"\d+", s)
     if digits_groups:
-        return str(int(digits_groups[-1]))  # last numeric run, leading zeros stripped
-    return str(inv).strip().lower()
+        best = max(enumerate(digits_groups), key=lambda x: (len(x[1]), x[0]))[1]  # longest; last on tie
+        return str(int(best))
+    return s.lower()
 
 
 # Anything within ₹2 is treated as normal rounding, not a real mismatch.
