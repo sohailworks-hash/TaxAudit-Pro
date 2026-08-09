@@ -337,11 +337,19 @@ function showUnlockOverlay(){
   el.classList.remove('hidden'); el.classList.add('flex');
 }
 
-// ---------- health check ----------
-fetch(API + '/api/v1/health').then(r=>{
-  if(r.ok){ document.getElementById('statusDot').style.background='#1E6B4E'; document.getElementById('statusText').textContent='backend online'; }
-  else throw new Error();
-}).catch(()=>{ document.getElementById('statusText').textContent='backend unreachable'; });
+// ---------- health check (retries while Render free-tier backend cold-starts) ----------
+function checkHealth(attempt){
+  attempt = attempt || 1;
+  document.getElementById('statusText').textContent = attempt===1 ? 'checking backend…' : 'waking backend… (' + attempt + ')';
+  fetch(API + '/api/v1/health').then(r=>{
+    if(r.ok){ document.getElementById('statusDot').style.background='#1E6B4E'; document.getElementById('statusText').textContent='backend online'; }
+    else throw new Error();
+  }).catch(()=>{
+    if(attempt < 15){ setTimeout(()=>checkHealth(attempt+1), 4000); }
+    else { document.getElementById('statusText').textContent='backend unreachable'; }
+  });
+}
+checkHealth();
 
 // ---------- tabs ----------
 function switchTab(name){
