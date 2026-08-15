@@ -103,7 +103,9 @@ def validate_invoice(payload: InvoiceValidateRequest, device: dict = Depends(aut
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Validation error: {e}")
 
+    # Pass device_id to DB
     db.log_validation(
+        device_id=device["device_id"],
         gstin=result.gstin,
         invoice_number=payload.invoice_number,
         severity=result.overall_severity,
@@ -140,7 +142,7 @@ def validate_invoice(payload: InvoiceValidateRequest, device: dict = Depends(aut
 # GSTR-2B matching
 # ---------------------------------------------------------------------------
 
-def _build_match_response(purchase_invoices, gstr2b_invoices, source: str) -> GSTRMatchResponse:
+def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, device_id: str) -> GSTRMatchResponse:
     if not purchase_invoices:
         raise HTTPException(status_code=400, detail="No valid purchase records found.")
 
@@ -165,7 +167,8 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str) -> GS
     mismatched = sum(1 for r in results if r.status == MatchStatus.MISMATCHED)
     missing = sum(1 for r in results if r.status == MatchStatus.MISSING_IN_GSTR2B)
 
-    db.log_match_summary(len(out), matched, mismatched, missing, source)
+    # Pass device_id to DB
+    db.log_match_summary(device_id, len(out), matched, mismatched, missing, source)
 
     return GSTRMatchResponse(
         total=len(out),
@@ -180,7 +183,7 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str) -> GS
 def match_gstr(payload: GSTRMatchRequest, device: dict = Depends(auth.get_device)):
     """Reconciliation via raw JSON payload."""
     auth.enforce_trial_limit(device)
-    return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json")
+    return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json", device_id=device["device_id"])
 
 
 @app.post("/api/v1/match-gstr-text", response_model=GSTRMatchResponse)
@@ -191,7 +194,7 @@ def match_gstr_text(payload: GSTRMatchTextRequest, device: dict = Depends(auth.g
     gstr2b_records = gstr_matching.parse_raw_text(payload.gstr2b_text)
     if not purchase_records or not gstr2b_records:
         raise HTTPException(status_code=400, detail="Could not detect any GSTIN/invoice records in the pasted text.")
-    return _build_match_response(purchase_records, gstr2b_records, source="text")
+    return _build_match_response(purchase_records, gstr2b_records, source="text", device_id=device["device_id"])
 
 
 @app.post("/api/v1/match-gstr-file", response_model=GSTRMatchResponse)
@@ -232,7 +235,7 @@ async def match_gstr_file(
     purchase_invoices = await parse(purchase_file)
     gstr2b_invoices = await parse(gstr2b_file)
 
-    return _build_match_response(purchase_invoices, gstr2b_invoices, source="file")
+    return _build_match_response(purchase_invoices, gstr2b_invoices, source="file", device_id=device["device_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -264,10 +267,8 @@ def flags_to_db(payload: FlagsToDBRequest):
 # Bulk invoice validation
 # ---------------------------------------------------------------------------
 
-def _validate_single(item_dict: dict) -> BulkResultItem:
-    """Validates one invoice dict, logs it, and returns a summarized result.
-    Never raises — processing errors for a single row are captured as a RED flag
-    so one bad row doesn't fail the whole bulk batch."""
+def _validate_single(item_dict: dict, device_id: str) -> BulkResultItem:
+    """Validates one invoice dict, logs it, and returns a summarized result."""
     invoice_number = item_dict.get("invoice_number")
     gstin = item_dict.get("supplier_gstin", "") or ""
 
@@ -298,7 +299,9 @@ def _validate_single(item_dict: dict) -> BulkResultItem:
             }],
         )
 
+    # Pass device_id to DB
     db.log_validation(
+        device_id=device_id,
         gstin=result.gstin,
         invoice_number=invoice_number,
         severity=result.overall_severity,
@@ -345,7 +348,7 @@ def validate_bulk_invoices(payload: BulkValidateRequest, device: dict = Depends(
     if not payload.invoices:
         raise HTTPException(status_code=400, detail="No invoices provided.")
 
-    results = [_validate_single(inv.model_dump()) for inv in payload.invoices]
+    results = [_validate_single(inv.model_dump(), device["device_id"]) for inv in payload.invoices]
     return _summarize_bulk(results)
 
 
@@ -416,7 +419,7 @@ async def validate_bulk_invoices_file(file: UploadFile = File(...), device: dict
     if not records:
         raise HTTPException(status_code=400, detail="No valid invoice rows found in file.")
 
-    results = [_validate_single(r) for r in records]
+    results = [_validate_single(r, device["device_id"]) for r in records]
     return _summarize_bulk(results)
 
 
@@ -460,18 +463,22 @@ def export_match_pdf(payload: PDFExportRequest):
 def audit_history_validations(
     limit: int = 20, offset: int = 0, severity: str = None,
     date_from: str = None, date_to: str = None, search: str = None,
+    device: dict = Depends(auth.get_device)  # Added Device Dependency
 ):
     try:
-        total, rows = db.query_validations(limit, offset, severity, date_from, date_to, search)
+        total, rows = db.query_validations(device["device_id"], limit, offset, severity, date_from, date_to, search)
         return {"total": total, "limit": limit, "offset": offset, "results": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not read history: {e}")
 
 
 @app.get("/api/v1/audit-history/matches")
-def audit_history_matches(limit: int = 20, offset: int = 0, date_from: str = None, date_to: str = None):
+def audit_history_matches(
+    limit: int = 20, offset: int = 0, date_from: str = None, date_to: str = None,
+    device: dict = Depends(auth.get_device)  # Added Device Dependency
+):
     try:
-        total, rows = db.query_matches(limit, offset, date_from, date_to)
+        total, rows = db.query_matches(device["device_id"], limit, offset, date_from, date_to)
         return {"total": total, "limit": limit, "offset": offset, "results": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not read history: {e}")
@@ -488,11 +495,14 @@ def _rows_to_csv(rows: list, fieldnames: list) -> str:
 
 
 @app.get("/api/v1/audit-history/validations/export-csv")
-def export_validations_csv(severity: str = None, date_from: str = None, date_to: str = None, search: str = None):
+def export_validations_csv(
+    severity: str = None, date_from: str = None, date_to: str = None, search: str = None,
+    device: dict = Depends(auth.get_device)  # Added Device Dependency
+):
     try:
-        _, rows = db.query_validations(limit=100000, offset=0, severity=severity,
+        _, rows = db.query_validations(device_id=device["device_id"], limit=100000, offset=0, severity=severity,
                                         date_from=date_from, date_to=date_to, search=search)
-        csv_text = _rows_to_csv(rows, ["id", "gstin", "invoice_number", "overall_severity",
+        csv_text = _rows_to_csv(rows, ["id", "device_id", "gstin", "invoice_number", "overall_severity",
                                         "is_valid", "transaction_type", "flag_count", "created_at"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
@@ -501,10 +511,13 @@ def export_validations_csv(severity: str = None, date_from: str = None, date_to:
 
 
 @app.get("/api/v1/audit-history/matches/export-csv")
-def export_matches_csv(date_from: str = None, date_to: str = None):
+def export_matches_csv(
+    date_from: str = None, date_to: str = None,
+    device: dict = Depends(auth.get_device)  # Added Device Dependency
+):
     try:
-        _, rows = db.query_matches(limit=100000, offset=0, date_from=date_from, date_to=date_to)
-        csv_text = _rows_to_csv(rows, ["id", "total", "matched", "mismatched",
+        _, rows = db.query_matches(device_id=device["device_id"], limit=100000, offset=0, date_from=date_from, date_to=date_to)
+        csv_text = _rows_to_csv(rows, ["id", "device_id", "total", "matched", "mismatched",
                                         "missing_in_gstr2b", "source", "created_at"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
