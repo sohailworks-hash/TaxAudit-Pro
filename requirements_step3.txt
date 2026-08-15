@@ -7,3 +7,6 @@ reportlab
 pandas==2.1.4
 numpy==1.26.4
 psycopg2-binary==2.9.9
+passlib[bcrypt]
+python-jose[cryptography]
+email-validator

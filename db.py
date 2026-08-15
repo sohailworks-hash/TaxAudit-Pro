@@ -33,10 +33,24 @@ def _dict_cursor(conn):
 def init_db():
     with get_conn() as conn:
         cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE,
+                password_hash TEXT,
+                trial_used INTEGER DEFAULT 0,
+                is_paid INTEGER DEFAULT 0,
+                paid_until TEXT,
+                created_at TEXT
+            )
+        """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS validation_logs (
                 id SERIAL PRIMARY KEY,
                 device_id TEXT,
+                user_id INTEGER,
                 gstin TEXT, invoice_number TEXT, overall_severity TEXT,
                 is_valid INTEGER, transaction_type TEXT, flag_count INTEGER,
                 created_at TEXT
@@ -46,6 +60,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS match_summaries (
                 id SERIAL PRIMARY KEY,
                 device_id TEXT,
+                user_id INTEGER,
                 total INTEGER, matched INTEGER, mismatched INTEGER,
                 missing_in_gstr2b INTEGER, source TEXT, created_at TEXT
             )
@@ -68,17 +83,63 @@ def init_db():
         cur.execute("""
             CREATE TABLE IF NOT EXISTS access_codes (
                 code TEXT PRIMARY KEY,
-                used INTEGER DEFAULT 0, used_by_device TEXT,
+                used INTEGER DEFAULT 0,
+                used_by_device TEXT,
+                used_by_user_id INTEGER,
                 duration_days INTEGER DEFAULT 30,
                 created_at TEXT, used_at TEXT
             )
         """)
-        
-        # Migrations for existing deployments
+
+        # Migrations
         cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS paid_until TEXT")
         cur.execute("ALTER TABLE access_codes ADD COLUMN IF NOT EXISTS duration_days INTEGER DEFAULT 30")
+        cur.execute("ALTER TABLE access_codes ADD COLUMN IF NOT EXISTS used_by_user_id INTEGER")
         cur.execute("ALTER TABLE validation_logs ADD COLUMN IF NOT EXISTS device_id TEXT")
         cur.execute("ALTER TABLE match_summaries ADD COLUMN IF NOT EXISTS device_id TEXT")
+        cur.execute("ALTER TABLE validation_logs ADD COLUMN IF NOT EXISTS user_id INTEGER")
+        cur.execute("ALTER TABLE match_summaries ADD COLUMN IF NOT EXISTS user_id INTEGER")
+
+# --- USER AUTHENTICATION FUNCTIONS ---
+
+def create_user(email: str, password_hash: str):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        try:
+            cur.execute(
+                "INSERT INTO users (email, password_hash, created_at) VALUES (%s, %s, %s) RETURNING id, email",
+                (email.lower(), password_hash, datetime.utcnow().isoformat())
+            )
+            return dict(cur.fetchone())
+        except psycopg2.errors.UniqueViolation:
+            return None
+
+def get_user_by_email(email: str):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        cur.execute("SELECT * FROM users WHERE email = %s", (email.lower(),))
+        return cur.fetchone()
+
+def get_user_by_id(user_id: int):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        if row:
+            d = dict(row)
+            if d["is_paid"] and d.get("paid_until"):
+                if datetime.utcnow().isoformat() > d["paid_until"]:
+                    cur.execute("UPDATE users SET is_paid = 0 WHERE id = %s", (user_id,))
+                    d["is_paid"] = 0
+            return d
+        return None
+
+def increment_user_trial(user_id: int):
+    with get_conn() as conn:
+        conn.cursor().execute("UPDATE users SET trial_used = trial_used + 1 WHERE id = %s", (user_id,))
+
+
+# --- EXISTING DEVICE FUNCTIONS ---
 
 def get_or_create_device(device_id: str):
     with get_conn() as conn:
@@ -119,23 +180,36 @@ def increment_ip_trial(ip: str):
             cur.execute("INSERT INTO ip_trials (ip, trial_used, created_at) VALUES (%s,1,%s)",
                          (ip, datetime.utcnow().isoformat()))
 
-def redeem_access_code(device_id: str, code: str) -> bool:
+# --- REDEEM CODE (ATOMIC UPDATE) ---
+
+def redeem_access_code(user_id: int, code: str) -> bool:
     with get_conn() as conn:
         cur = _dict_cursor(conn)
-        cur.execute("SELECT * FROM access_codes WHERE code = %s", (code.strip().upper(),))
+        # Atomic Update to prevent race condition
+        cur.execute(
+            """
+            UPDATE access_codes
+            SET used = 1, used_by_user_id = %s, used_at = %s
+            WHERE code = %s AND used = 0
+            RETURNING duration_days
+            """,
+            (user_id, datetime.utcnow().isoformat(), code.strip().upper())
+        )
         row = cur.fetchone()
-        if not row or row["used"]:
-            return False
+
+        if not row:
+            return False  # Invalid or already used
+
         duration_days = row["duration_days"] or 30
-        cur.execute("UPDATE access_codes SET used = 1, used_by_device = %s, used_at = %s WHERE code = %s",
-                     (device_id, datetime.utcnow().isoformat(), code.strip().upper()))
-        cur.execute("SELECT paid_until, is_paid FROM devices WHERE device_id = %s", (device_id,))
+
+        cur.execute("SELECT paid_until, is_paid FROM users WHERE id = %s", (user_id,))
         existing = cur.fetchone()
         base = datetime.utcnow()
         if existing and existing["is_paid"] and existing["paid_until"] and existing["paid_until"] > base.isoformat():
             base = datetime.fromisoformat(existing["paid_until"])
+
         new_until = (base + timedelta(days=duration_days)).isoformat()
-        cur.execute("UPDATE devices SET is_paid = 1, paid_until = %s WHERE device_id = %s", (new_until, device_id))
+        cur.execute("UPDATE users SET is_paid = 1, paid_until = %s WHERE id = %s", (new_until, user_id))
         return True
 
 def generate_access_code(code: str, duration_days: int = 30):
@@ -145,38 +219,30 @@ def generate_access_code(code: str, duration_days: int = 30):
             (code.strip().upper(), duration_days, datetime.utcnow().isoformat())
         )
 
-def log_validation(device_id: str, gstin: str, invoice_number: Optional[str], severity: str,
-                    is_valid: bool, tx_type: str, flag_count: int):
+# --- LOGGING & QUERYING ---
+
+def log_validation(gstin: str, invoice_number: Optional[str], severity: str,
+                    is_valid: bool, tx_type: str, flag_count: int,
+                    device_id: str = None, user_id: int = None):
     try:
         with get_conn() as conn:
             conn.cursor().execute(
-                "INSERT INTO validation_logs (device_id, gstin, invoice_number, overall_severity, is_valid, transaction_type, flag_count, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                (device_id, gstin, invoice_number, severity, int(is_valid), tx_type, flag_count, datetime.utcnow().isoformat())
+                "INSERT INTO validation_logs (device_id, user_id, gstin, invoice_number, overall_severity, is_valid, transaction_type, flag_count, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (device_id, user_id, gstin, invoice_number, severity, int(is_valid), tx_type, flag_count, datetime.utcnow().isoformat())
             )
     except Exception as e:
         print(f"[db] validation log failed: {e}")
 
-def log_match_summary(device_id: str, total: int, matched: int, mismatched: int, missing: int, source: str):
+def log_match_summary(total: int, matched: int, mismatched: int, missing: int, source: str,
+                      device_id: str = None, user_id: int = None):
     try:
         with get_conn() as conn:
             conn.cursor().execute(
-                "INSERT INTO match_summaries (device_id, total, matched, mismatched, missing_in_gstr2b, source, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                (device_id, total, matched, mismatched, missing, source, datetime.utcnow().isoformat())
+                "INSERT INTO match_summaries (device_id, user_id, total, matched, mismatched, missing_in_gstr2b, source, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (device_id, user_id, total, matched, mismatched, missing, source, datetime.utcnow().isoformat())
             )
     except Exception as e:
         print(f"[db] match summary log failed: {e}")
-
-def get_recent_validations(device_id: str, limit: int = 20):
-    with get_conn() as conn:
-        cur = _dict_cursor(conn)
-        cur.execute("SELECT * FROM validation_logs WHERE device_id = %s ORDER BY id DESC LIMIT %s", (device_id, limit))
-        return [dict(r) for r in cur.fetchall()]
-
-def get_recent_matches(device_id: str, limit: int = 20):
-    with get_conn() as conn:
-        cur = _dict_cursor(conn)
-        cur.execute("SELECT * FROM match_summaries WHERE device_id = %s ORDER BY id DESC LIMIT %s", (device_id, limit))
-        return [dict(r) for r in cur.fetchall()]
 
 def _date_where(date_from, date_to, clauses, params):
     if date_from:
@@ -184,18 +250,23 @@ def _date_where(date_from, date_to, clauses, params):
     if date_to:
         clauses.append("created_at <= %s"); params.append(date_to + "T23:59:59")
 
-def query_validations(device_id: str, limit=20, offset=0, severity=None, date_from=None, date_to=None, search=None):
-    # device_id is compulsory now
-    clauses = ["device_id = %s"]
-    params = [device_id]
-    
+def query_validations(user_id: int = None, device_id: str = None, limit=20, offset=0,
+                      severity=None, date_from=None, date_to=None, search=None):
+    clauses = []
+    params = []
+
+    if user_id is not None:
+        clauses.append("user_id = %s"); params.append(user_id)
+    elif device_id is not None:
+        clauses.append("device_id = %s"); params.append(device_id)
+
     if severity: clauses.append("overall_severity = %s"); params.append(severity)
     if search:
         clauses.append("(gstin LIKE %s OR invoice_number LIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     _date_where(date_from, date_to, clauses, params)
-    
-    where = f"WHERE {' AND '.join(clauses)}"
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with get_conn() as conn:
         cur = _dict_cursor(conn)
         cur.execute(f"SELECT COUNT(*) AS c FROM validation_logs {where}", params)
@@ -206,14 +277,17 @@ def query_validations(device_id: str, limit=20, offset=0, severity=None, date_fr
         )
         return total, [dict(r) for r in cur.fetchall()]
 
-def query_matches(device_id: str, limit=20, offset=0, date_from=None, date_to=None):
-    # device_id is compulsory now
-    clauses = ["device_id = %s"]
-    params = [device_id]
-    
+def query_matches(user_id: int = None, device_id: str = None, limit=20, offset=0, date_from=None, date_to=None):
+    clauses = []
+    params = []
+    if user_id is not None:
+        clauses.append("user_id = %s"); params.append(user_id)
+    elif device_id is not None:
+        clauses.append("device_id = %s"); params.append(device_id)
+
     _date_where(date_from, date_to, clauses, params)
-    where = f"WHERE {' AND '.join(clauses)}"
-    
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
     with get_conn() as conn:
         cur = _dict_cursor(conn)
         cur.execute(f"SELECT COUNT(*) AS c FROM match_summaries {where}", params)

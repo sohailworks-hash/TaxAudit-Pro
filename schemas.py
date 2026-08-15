@@ -3,10 +3,26 @@ schemas.py
 ==========
 Pydantic request/response models for the FastAPI backend.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict, Any
 
+# --- NAYE AUTH SCHEMAS ---
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
 
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class AuthResponse(BaseModel):
+    token: str
+    user_id: int
+    email: str
+    is_paid: bool
+    paid_until: Optional[str] = None
+
+# --- EXISTING SCHEMAS ---
 class InvoiceValidateRequest(BaseModel):
     supplier_gstin: str
     buyer_gstin: Optional[str] = None
@@ -20,7 +36,6 @@ class InvoiceValidateRequest(BaseModel):
     invoice_number: Optional[str] = None
     item_tax_rate: float = 18.0
 
-
 class FlagOut(BaseModel):
     field: str
     severity: str
@@ -28,7 +43,6 @@ class FlagOut(BaseModel):
     expected: Optional[str] = None
     found: Optional[str] = None
     rule_code: Optional[str] = None
-
 
 class InvoiceValidateResponse(BaseModel):
     is_valid: bool
@@ -42,16 +56,13 @@ class InvoiceValidateResponse(BaseModel):
     pan: Optional[str] = None
     flags: List[FlagOut] = []
 
-
 class GSTRMatchRequest(BaseModel):
     purchase_invoices: List[Dict[str, Any]]
     gstr2b_invoices: List[Dict[str, Any]]
 
-
 class GSTRMatchTextRequest(BaseModel):
     purchase_text: str
     gstr2b_text: str
-
 
 class MatchResultOut(BaseModel):
     invoice_number: Optional[str] = None
@@ -61,7 +72,6 @@ class MatchResultOut(BaseModel):
     tax_diff: float = 0.0
     matched_data: Dict[str, Any] = {}
 
-
 class GSTRMatchResponse(BaseModel):
     total: int
     matched: int
@@ -69,21 +79,15 @@ class GSTRMatchResponse(BaseModel):
     missing_in_gstr2b: int
     results: List[MatchResultOut]
 
-
 class FlagsToDBRequest(BaseModel):
     flags: List[FlagOut]
     invoice_id: Optional[str] = None
 
-
 class FlagsToDBResponse(BaseModel):
     records: List[Dict[str, Any]]
 
-
-# ---------- Bulk invoice validation ----------
-
 class BulkInvoiceItem(InvoiceValidateRequest):
     pass
-
 
 class BulkResultItem(BaseModel):
     invoice_number: Optional[str] = None
@@ -94,10 +98,8 @@ class BulkResultItem(BaseModel):
     flag_count: int
     flags: List[FlagOut] = []
 
-
 class BulkValidateRequest(BaseModel):
     invoices: List[BulkInvoiceItem]
-
 
 class BulkValidateResponse(BaseModel):
     total: int
@@ -105,9 +107,6 @@ class BulkValidateResponse(BaseModel):
     yellow: int
     red: int
     results: List[BulkResultItem]
-
-
-# ---------- PDF audit report export ----------
 
 class PDFExportRequest(BaseModel):
     firm_name: Optional[str] = "GST Audit Assistant"

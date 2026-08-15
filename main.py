@@ -4,7 +4,6 @@ main.py
 FastAPI backend for AI Tax & Document Audit Assistant.
 """
 from io import BytesIO, StringIO
-
 import secrets
 import re
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
@@ -19,6 +18,7 @@ from gstr_matching import GSTRMatchingEngine, GSTR2BParser, MatchStatus, normali
 from report_generator import generate_audit_pdf, generate_match_summary_pdf
 from pydantic import BaseModel
 from schemas import (
+    SignupRequest, LoginRequest, AuthResponse,
     InvoiceValidateRequest, InvoiceValidateResponse,
     GSTRMatchRequest, GSTRMatchTextRequest, GSTRMatchResponse, MatchResultOut,
     FlagsToDBRequest, FlagsToDBResponse,
@@ -56,56 +56,87 @@ def health():
 
 
 # ---------------------------------------------------------------------------
-# Device-based trial + access code system
+# Authentication Endpoints
 # ---------------------------------------------------------------------------
 
+@app.post("/api/v1/auth/signup", response_model=AuthResponse)
+def signup(payload: SignupRequest):
+    hashed_pw = auth.get_password_hash(payload.password)
+    user = db.create_user(payload.email, hashed_pw)
+    if not user:
+        raise HTTPException(status_code=400, detail="Email already registered.")
+
+    token = auth.create_access_token(data={"sub": str(user["id"])})
+    return AuthResponse(
+        token=token,
+        user_id=user["id"],
+        email=user["email"],
+        is_paid=False,
+        paid_until=None
+    )
+
+@app.post("/api/v1/auth/login", response_model=AuthResponse)
+def login(payload: LoginRequest):
+    user = db.get_user_by_email(payload.email)
+    if not user or not auth.verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = auth.create_access_token(data={"sub": str(user["id"])})
+    return AuthResponse(
+        token=token,
+        user_id=user["id"],
+        email=user["email"],
+        is_paid=bool(user["is_paid"]),
+        paid_until=user["paid_until"]
+    )
+
+@app.get("/api/v1/user/status")
+def user_status(current_user: dict = Depends(auth.get_current_user)):
+    return {
+        "user_id": current_user["id"],
+        "email": current_user["email"],
+        "is_paid": bool(current_user["is_paid"]),
+        "paid_until": current_user.get("paid_until"),
+        "trial_used": current_user.get("trial_used", 0),
+        "trial_limit": auth.FREE_TRIAL_LIMIT
+    }
+
+
 class RedeemRequest(BaseModel):
-    device_id: str
     code: str
 
 class GenerateCodeRequest(BaseModel):
     admin_key: str
     duration_days: int = 30
 
-
-@app.get("/api/v1/device/status")
-def device_status(device: dict = Depends(auth.get_device)):
-    return {"device_id": device["device_id"], "is_paid": bool(device["is_paid"]),
-            "paid_until": device.get("paid_until"),
-            "trial_used": device["trial_used"], "trial_limit": auth.FREE_TRIAL_LIMIT}
-
-
 @app.post("/api/v1/access/redeem")
-def redeem_code(payload: RedeemRequest):
-    if not db.redeem_access_code(payload.device_id, payload.code):
+def redeem_code(payload: RedeemRequest, current_user: dict = Depends(auth.get_current_user)):
+    if not db.redeem_access_code(current_user["id"], payload.code):
         raise HTTPException(status_code=400, detail="Invalid or already-used access code.")
     return {"message": "Access unlocked successfully."}
 
 
 @app.post("/api/v1/admin/generate-code")
 def admin_generate_code(payload: GenerateCodeRequest):
-    if payload.admin_key != auth.ADMIN_KEY:
+    # --- SECURE TIMING-ATTACK SAFE COMPARISON ---
+    if not secrets.compare_digest(payload.admin_key, auth.ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Invalid admin key.")
+
     code = auth.generate_code()
     db.generate_access_code(code, payload.duration_days)
     return {"code": code, "duration_days": payload.duration_days}
 
 
-# ---------------------------------------------------------------------------
-# Single invoice validation
-# ---------------------------------------------------------------------------
-
 @app.post("/api/v1/validate-invoice", response_model=InvoiceValidateResponse)
-def validate_invoice(payload: InvoiceValidateRequest, device: dict = Depends(auth.get_device)):
-    auth.enforce_trial_limit(device)
+def validate_invoice(payload: InvoiceValidateRequest, current_user: dict = Depends(auth.get_current_user)):
+    auth.enforce_trial_limit(current_user)
     try:
         result = GSTValidator.validate_invoice(**payload.model_dump())
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Validation error: {e}")
 
-    # Pass device_id to DB
     db.log_validation(
-        device_id=device["device_id"],
+        user_id=current_user["id"],
         gstin=result.gstin,
         invoice_number=payload.invoice_number,
         severity=result.overall_severity,
@@ -138,11 +169,7 @@ def validate_invoice(payload: InvoiceValidateRequest, device: dict = Depends(aut
     )
 
 
-# ---------------------------------------------------------------------------
-# GSTR-2B matching
-# ---------------------------------------------------------------------------
-
-def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, device_id: str) -> GSTRMatchResponse:
+def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_id: int) -> GSTRMatchResponse:
     if not purchase_invoices:
         raise HTTPException(status_code=400, detail="No valid purchase records found.")
 
@@ -167,8 +194,7 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, devic
     mismatched = sum(1 for r in results if r.status == MatchStatus.MISMATCHED)
     missing = sum(1 for r in results if r.status == MatchStatus.MISSING_IN_GSTR2B)
 
-    # Pass device_id to DB
-    db.log_match_summary(device_id, len(out), matched, mismatched, missing, source)
+    db.log_match_summary(total=len(out), matched=matched, mismatched=mismatched, missing=missing, source=source, user_id=user_id)
 
     return GSTRMatchResponse(
         total=len(out),
@@ -180,31 +206,28 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, devic
 
 
 @app.post("/api/v1/match-gstr", response_model=GSTRMatchResponse)
-def match_gstr(payload: GSTRMatchRequest, device: dict = Depends(auth.get_device)):
-    """Reconciliation via raw JSON payload."""
-    auth.enforce_trial_limit(device)
-    return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json", device_id=device["device_id"])
+def match_gstr(payload: GSTRMatchRequest, current_user: dict = Depends(auth.get_current_user)):
+    auth.enforce_trial_limit(current_user)
+    return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json", user_id=current_user["id"])
 
 
 @app.post("/api/v1/match-gstr-text", response_model=GSTRMatchResponse)
-def match_gstr_text(payload: GSTRMatchTextRequest, device: dict = Depends(auth.get_device)):
-    """Reconciliation via pasted freeform text (portal copy-paste, WhatsApp, Tally screen etc.)."""
-    auth.enforce_trial_limit(device)
+def match_gstr_text(payload: GSTRMatchTextRequest, current_user: dict = Depends(auth.get_current_user)):
+    auth.enforce_trial_limit(current_user)
     purchase_records = gstr_matching.parse_raw_text(payload.purchase_text)
     gstr2b_records = gstr_matching.parse_raw_text(payload.gstr2b_text)
     if not purchase_records or not gstr2b_records:
         raise HTTPException(status_code=400, detail="Could not detect any GSTIN/invoice records in the pasted text.")
-    return _build_match_response(purchase_records, gstr2b_records, source="text", device_id=device["device_id"])
+    return _build_match_response(purchase_records, gstr2b_records, source="text", user_id=current_user["id"])
 
 
 @app.post("/api/v1/match-gstr-file", response_model=GSTRMatchResponse)
 async def match_gstr_file(
     purchase_file: UploadFile = File(...),
     gstr2b_file: UploadFile = File(...),
-    device: dict = Depends(auth.get_device),
+    current_user: dict = Depends(auth.get_current_user),
 ):
-    """Reconciliation via uploaded CSV or Excel (.xlsx/.xls) files."""
-    auth.enforce_trial_limit(device)
+    auth.enforce_trial_limit(current_user)
 
     async def parse(file: UploadFile):
         name = (file.filename or "").lower()
@@ -235,12 +258,8 @@ async def match_gstr_file(
     purchase_invoices = await parse(purchase_file)
     gstr2b_invoices = await parse(gstr2b_file)
 
-    return _build_match_response(purchase_invoices, gstr2b_invoices, source="file", device_id=device["device_id"])
+    return _build_match_response(purchase_invoices, gstr2b_invoices, source="file", user_id=current_user["id"])
 
-
-# ---------------------------------------------------------------------------
-# Flags to DB format
-# ---------------------------------------------------------------------------
 
 @app.post("/api/v1/flags-to-db", response_model=FlagsToDBResponse)
 def flags_to_db(payload: FlagsToDBRequest):
@@ -263,12 +282,7 @@ def flags_to_db(payload: FlagsToDBRequest):
     return FlagsToDBResponse(records=records)
 
 
-# ---------------------------------------------------------------------------
-# Bulk invoice validation
-# ---------------------------------------------------------------------------
-
-def _validate_single(item_dict: dict, device_id: str) -> BulkResultItem:
-    """Validates one invoice dict, logs it, and returns a summarized result."""
+def _validate_single(item_dict: dict, user_id: int) -> BulkResultItem:
     invoice_number = item_dict.get("invoice_number")
     gstin = item_dict.get("supplier_gstin", "") or ""
 
@@ -299,9 +313,8 @@ def _validate_single(item_dict: dict, device_id: str) -> BulkResultItem:
             }],
         )
 
-    # Pass device_id to DB
     db.log_validation(
-        device_id=device_id,
+        user_id=user_id,
         gstin=result.gstin,
         invoice_number=invoice_number,
         severity=result.overall_severity,
@@ -342,18 +355,16 @@ def _summarize_bulk(results: list) -> BulkValidateResponse:
 
 
 @app.post("/api/v1/validate-bulk-invoices", response_model=BulkValidateResponse)
-def validate_bulk_invoices(payload: BulkValidateRequest, device: dict = Depends(auth.get_device)):
-    """Validates a JSON array of invoices in one call."""
-    auth.enforce_trial_limit(device)
+def validate_bulk_invoices(payload: BulkValidateRequest, current_user: dict = Depends(auth.get_current_user)):
+    auth.enforce_trial_limit(current_user)
     if not payload.invoices:
         raise HTTPException(status_code=400, detail="No invoices provided.")
 
-    results = [_validate_single(inv.model_dump(), device["device_id"]) for inv in payload.invoices]
+    results = [_validate_single(inv.model_dump(), current_user["id"]) for inv in payload.invoices]
     return _summarize_bulk(results)
 
 
 def _parse_invoice_file(raw: bytes, filename: str) -> list:
-    """Parses a CSV or Excel file of invoices into a list of dicts."""
     try:
         import pandas as pd
     except ImportError:
@@ -407,9 +418,8 @@ def _parse_invoice_file(raw: bytes, filename: str) -> list:
 
 
 @app.post("/api/v1/validate-bulk-invoices-file", response_model=BulkValidateResponse)
-async def validate_bulk_invoices_file(file: UploadFile = File(...), device: dict = Depends(auth.get_device)):
-    """Validates a batch of invoices uploaded as a CSV or Excel file."""
-    auth.enforce_trial_limit(device)
+async def validate_bulk_invoices_file(file: UploadFile = File(...), current_user: dict = Depends(auth.get_current_user)):
+    auth.enforce_trial_limit(current_user)
     try:
         raw = await file.read()
     except Exception as e:
@@ -419,13 +429,9 @@ async def validate_bulk_invoices_file(file: UploadFile = File(...), device: dict
     if not records:
         raise HTTPException(status_code=400, detail="No valid invoice rows found in file.")
 
-    results = [_validate_single(r, device["device_id"]) for r in records]
+    results = [_validate_single(r, current_user["id"]) for r in records]
     return _summarize_bulk(results)
 
-
-# ---------------------------------------------------------------------------
-# PDF audit report export
-# ---------------------------------------------------------------------------
 
 @app.post("/api/v1/export-audit-pdf")
 def export_audit_pdf(payload: PDFExportRequest):
@@ -455,18 +461,14 @@ def export_match_pdf(payload: PDFExportRequest):
     )
 
 
-# ---------------------------------------------------------------------------
-# Audit history
-# ---------------------------------------------------------------------------
-
 @app.get("/api/v1/audit-history/validations")
 def audit_history_validations(
     limit: int = 20, offset: int = 0, severity: str = None,
     date_from: str = None, date_to: str = None, search: str = None,
-    device: dict = Depends(auth.get_device)  # Added Device Dependency
+    current_user: dict = Depends(auth.get_current_user)
 ):
     try:
-        total, rows = db.query_validations(device["device_id"], limit, offset, severity, date_from, date_to, search)
+        total, rows = db.query_validations(user_id=current_user["id"], limit=limit, offset=offset, severity=severity, date_from=date_from, date_to=date_to, search=search)
         return {"total": total, "limit": limit, "offset": offset, "results": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not read history: {e}")
@@ -475,10 +477,10 @@ def audit_history_validations(
 @app.get("/api/v1/audit-history/matches")
 def audit_history_matches(
     limit: int = 20, offset: int = 0, date_from: str = None, date_to: str = None,
-    device: dict = Depends(auth.get_device)  # Added Device Dependency
+    current_user: dict = Depends(auth.get_current_user)
 ):
     try:
-        total, rows = db.query_matches(device["device_id"], limit, offset, date_from, date_to)
+        total, rows = db.query_matches(user_id=current_user["id"], limit=limit, offset=offset, date_from=date_from, date_to=date_to)
         return {"total": total, "limit": limit, "offset": offset, "results": rows}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not read history: {e}")
@@ -497,12 +499,12 @@ def _rows_to_csv(rows: list, fieldnames: list) -> str:
 @app.get("/api/v1/audit-history/validations/export-csv")
 def export_validations_csv(
     severity: str = None, date_from: str = None, date_to: str = None, search: str = None,
-    device: dict = Depends(auth.get_device)  # Added Device Dependency
+    current_user: dict = Depends(auth.get_current_user)
 ):
     try:
-        _, rows = db.query_validations(device_id=device["device_id"], limit=100000, offset=0, severity=severity,
+        _, rows = db.query_validations(user_id=current_user["id"], limit=100000, offset=0, severity=severity,
                                         date_from=date_from, date_to=date_to, search=search)
-        csv_text = _rows_to_csv(rows, ["id", "device_id", "gstin", "invoice_number", "overall_severity",
+        csv_text = _rows_to_csv(rows, ["id", "user_id", "device_id", "gstin", "invoice_number", "overall_severity",
                                         "is_valid", "transaction_type", "flag_count", "created_at"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
@@ -513,11 +515,11 @@ def export_validations_csv(
 @app.get("/api/v1/audit-history/matches/export-csv")
 def export_matches_csv(
     date_from: str = None, date_to: str = None,
-    device: dict = Depends(auth.get_device)  # Added Device Dependency
+    current_user: dict = Depends(auth.get_current_user)
 ):
     try:
-        _, rows = db.query_matches(device_id=device["device_id"], limit=100000, offset=0, date_from=date_from, date_to=date_to)
-        csv_text = _rows_to_csv(rows, ["id", "device_id", "total", "matched", "mismatched",
+        _, rows = db.query_matches(user_id=current_user["id"], limit=100000, offset=0, date_from=date_from, date_to=date_to)
+        csv_text = _rows_to_csv(rows, ["id", "user_id", "device_id", "total", "matched", "mismatched",
                                         "missing_in_gstr2b", "source", "created_at"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
