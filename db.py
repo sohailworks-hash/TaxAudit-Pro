@@ -1,4 +1,5 @@
 import os
+import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Optional
@@ -6,6 +7,7 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
+GSTIN_PATTERN = r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$"
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 _pool = None
@@ -47,6 +49,29 @@ def init_db():
         """)
 
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS clients (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                gstin TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS vendors (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                gstin TEXT NOT NULL,
+                trade_name TEXT,
+                first_seen_date TEXT NOT NULL,
+                last_seen_date TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (user_id, gstin)
+            )
+        """)
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS validation_logs (
                 id SERIAL PRIMARY KEY,
                 device_id TEXT,
@@ -56,6 +81,7 @@ def init_db():
                 created_at TEXT
             )
         """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS match_summaries (
                 id SERIAL PRIMARY KEY,
@@ -65,6 +91,7 @@ def init_db():
                 missing_in_gstr2b INTEGER, source TEXT, created_at TEXT
             )
         """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS devices (
                 device_id TEXT PRIMARY KEY,
@@ -73,6 +100,7 @@ def init_db():
                 created_at TEXT
             )
         """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ip_trials (
                 ip TEXT PRIMARY KEY,
@@ -80,6 +108,7 @@ def init_db():
                 created_at TEXT
             )
         """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS access_codes (
                 code TEXT PRIMARY KEY,
@@ -100,8 +129,47 @@ def init_db():
         cur.execute("ALTER TABLE validation_logs ADD COLUMN IF NOT EXISTS user_id INTEGER")
         cur.execute("ALTER TABLE match_summaries ADD COLUMN IF NOT EXISTS user_id INTEGER")
 
-# --- USER AUTHENTICATION FUNCTIONS ---
+        # Safely add client_id with Foreign Key
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='validation_logs' AND column_name='client_id'
+                ) THEN
+                    ALTER TABLE validation_logs ADD COLUMN client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE;
+                END IF;
+            END $$;
+        """)
 
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='match_summaries' AND column_name='client_id'
+                ) THEN
+                    ALTER TABLE match_summaries ADD COLUMN client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE;
+                END IF;
+            END $$;
+        """)
+
+        # Safely add vendor_id with ON DELETE SET NULL and Index
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='validation_logs' AND column_name='vendor_id'
+                ) THEN
+                    ALTER TABLE validation_logs ADD COLUMN vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL;
+                    CREATE INDEX idx_validation_logs_vendor_id ON validation_logs(vendor_id);
+                END IF;
+            END $$;
+        """)
+
+
+# --- USER AUTHENTICATION FUNCTIONS ---
 def create_user(email: str, password_hash: str):
     with get_conn() as conn:
         cur = _dict_cursor(conn)
@@ -138,9 +206,169 @@ def increment_user_trial(user_id: int):
     with get_conn() as conn:
         conn.cursor().execute("UPDATE users SET trial_used = trial_used + 1 WHERE id = %s", (user_id,))
 
+# --- CLIENT MANAGEMENT FUNCTIONS ---
+def create_client(user_id: int, name: str, gstin: str):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        cur.execute(
+            "INSERT INTO clients (user_id, name, gstin, created_at) VALUES (%s, %s, %s, %s) RETURNING *",
+            (user_id, name.strip(), gstin.strip().upper(), datetime.utcnow().isoformat())
+        )
+        return dict(cur.fetchone())
 
-# --- EXISTING DEVICE FUNCTIONS ---
+def get_clients_by_user(user_id: int):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        cur.execute("SELECT * FROM clients WHERE user_id = %s ORDER BY id DESC", (user_id,))
+        return [dict(r) for r in cur.fetchall()]
 
+def get_client_by_id(client_id: int, user_id: int):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        cur.execute("SELECT * FROM clients WHERE id = %s AND user_id = %s", (client_id, user_id))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+def delete_client(client_id: int, user_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM clients WHERE id = %s AND user_id = %s RETURNING id", (client_id, user_id))
+        return cur.fetchone() is not None
+
+# --- VENDOR TRACKING: CORE LINKING ---
+def get_or_create_vendor(user_id: int, gstin: str, trade_name: str = None) -> int:
+    if not gstin:
+        return None
+
+    gstin = gstin.strip().upper()
+    if not re.match(GSTIN_PATTERN, gstin):
+        return None  # Gracefully reject junk GSTINs
+
+    now = datetime.utcnow().isoformat()
+    date_only = now[:10]
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO vendors (user_id, gstin, trade_name, first_seen_date, last_seen_date, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, gstin)
+            DO UPDATE SET last_seen_date = GREATEST(vendors.last_seen_date, EXCLUDED.last_seen_date)
+            RETURNING id
+        """, (user_id, gstin, trade_name, date_only, date_only, now))
+
+        return cur.fetchone()[0]
+
+# --- VENDOR TRACKING: PHASE 2 READ/UPDATE ---
+def compute_vendor_risk(total: int, mismatch_count: int, months_active: int) -> str:
+    if total < 3:
+        return "INSUFFICIENT_DATA"
+    pct = (mismatch_count / total) * 100
+    if pct > 25 and months_active >= 3:
+        return "HIGH"
+    if pct >= 10:
+        return "MEDIUM"
+    return "LOW"
+
+def get_vendors_by_user(user_id: int):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        cur.execute("""
+            SELECT v.id, v.gstin, v.trade_name, v.last_seen_date, v.first_seen_date,
+                   COUNT(vl.id) AS total_invoices,
+                   SUM(CASE WHEN vl.overall_severity != 'GREEN' THEN 1 ELSE 0 END) AS mismatch_count
+            FROM vendors v
+            LEFT JOIN validation_logs vl ON vl.vendor_id = v.id
+            WHERE v.user_id = %s
+            GROUP BY v.id
+            ORDER BY v.last_seen_date DESC
+        """, (user_id,))
+        rows = [dict(r) for r in cur.fetchall()]
+
+    results = []
+    for r in rows:
+        total = r["total_invoices"] or 0
+        mismatch = r["mismatch_count"] or 0
+        pct = round((mismatch / total) * 100, 1) if total else 0.0
+        try:
+            months_active = max(1, (datetime.fromisoformat(r["last_seen_date"]) - datetime.fromisoformat(r["first_seen_date"])).days // 30)
+        except Exception:
+            months_active = 1
+        r["total_invoices"] = total
+        r["mismatch_count"] = mismatch
+        r["mismatch_pct"] = pct
+        r["risk_level"] = compute_vendor_risk(total, mismatch, months_active)
+        results.append(r)
+    return results
+
+def get_vendor_detail(vendor_id: int, user_id: int):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        cur.execute("SELECT * FROM vendors WHERE id = %s AND user_id = %s", (vendor_id, user_id))
+        vendor = cur.fetchone()
+        if not vendor:
+            return None
+        vendor = dict(vendor)
+
+        cur.execute("""
+            SELECT id, invoice_number, overall_severity, is_valid, transaction_type,
+                   flag_count, client_id, created_at
+            FROM validation_logs
+            WHERE vendor_id = %s AND user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 200
+        """, (vendor_id, user_id))
+        validations = [dict(r) for r in cur.fetchall()]
+
+    total = len(validations)
+    mismatch = sum(1 for v in validations if v["overall_severity"] != "GREEN")
+    pct = round((mismatch / total) * 100, 1) if total else 0.0
+    try:
+        months_active = max(1, (datetime.fromisoformat(vendor["last_seen_date"]) - datetime.fromisoformat(vendor["first_seen_date"])).days // 30)
+    except Exception:
+        months_active = 1
+
+    vendor["total_invoices"] = total
+    vendor["mismatch_count"] = mismatch
+    vendor["mismatch_pct"] = pct
+    vendor["risk_level"] = compute_vendor_risk(total, mismatch, months_active)
+    vendor["validations"] = validations
+    return vendor
+
+def get_vendor_trend(vendor_id: int, user_id: int):
+    with get_conn() as conn:
+        cur = _dict_cursor(conn)
+        cur.execute("SELECT id FROM vendors WHERE id = %s AND user_id = %s", (vendor_id, user_id))
+        if not cur.fetchone():
+            return None
+        cur.execute("""
+            SELECT TO_CHAR(created_at::timestamp, 'YYYY-MM') AS month,
+                   COUNT(*) AS total_invoices,
+                   SUM(CASE WHEN overall_severity != 'GREEN' THEN 1 ELSE 0 END) AS mismatch_count
+            FROM validation_logs
+            WHERE vendor_id = %s AND user_id = %s
+            GROUP BY month
+            ORDER BY month ASC
+        """, (vendor_id, user_id))
+        rows = [dict(r) for r in cur.fetchall()]
+
+    for r in rows:
+        total = r["total_invoices"] or 0
+        mismatch = r["mismatch_count"] or 0
+        r["mismatch_pct"] = round((mismatch / total) * 100, 1) if total else 0.0
+    return rows
+
+def update_vendor_trade_name(vendor_id: int, user_id: int, trade_name: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE vendors SET trade_name = %s WHERE id = %s AND user_id = %s RETURNING id",
+            (trade_name, vendor_id, user_id)
+        )
+        return cur.fetchone() is not None
+
+
+# --- EXISTING DEVICE & CODE FUNCTIONS ---
 def get_or_create_device(device_id: str):
     with get_conn() as conn:
         cur = _dict_cursor(conn)
@@ -180,12 +408,9 @@ def increment_ip_trial(ip: str):
             cur.execute("INSERT INTO ip_trials (ip, trial_used, created_at) VALUES (%s,1,%s)",
                          (ip, datetime.utcnow().isoformat()))
 
-# --- REDEEM CODE (ATOMIC UPDATE) ---
-
 def redeem_access_code(user_id: int, code: str) -> bool:
     with get_conn() as conn:
         cur = _dict_cursor(conn)
-        # Atomic Update to prevent race condition
         cur.execute(
             """
             UPDATE access_codes
@@ -198,7 +423,7 @@ def redeem_access_code(user_id: int, code: str) -> bool:
         row = cur.fetchone()
 
         if not row:
-            return False  # Invalid or already used
+            return False
 
         duration_days = row["duration_days"] or 30
 
@@ -220,26 +445,39 @@ def generate_access_code(code: str, duration_days: int = 30):
         )
 
 # --- LOGGING & QUERYING ---
-
 def log_validation(gstin: str, invoice_number: Optional[str], severity: str,
                     is_valid: bool, tx_type: str, flag_count: int,
-                    device_id: str = None, user_id: int = None):
+                    device_id: str = None, user_id: int = None, client_id: int = None):
+
+    # --- VENDOR LOGIC (non-fatal — never blocks the core log write) ---
+    vendor_id = None
+    if user_id and gstin:
+        try:
+            vendor_id = get_or_create_vendor(user_id, gstin)
+        except Exception as ve:
+            print(f"[db] vendor link failed (non-fatal): {ve}")
+    # ------------------------
+
     try:
         with get_conn() as conn:
             conn.cursor().execute(
-                "INSERT INTO validation_logs (device_id, user_id, gstin, invoice_number, overall_severity, is_valid, transaction_type, flag_count, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (device_id, user_id, gstin, invoice_number, severity, int(is_valid), tx_type, flag_count, datetime.utcnow().isoformat())
+                """INSERT INTO validation_logs
+                (device_id, user_id, client_id, vendor_id, gstin, invoice_number, overall_severity, is_valid, transaction_type, flag_count, created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (device_id, user_id, client_id, vendor_id, gstin, invoice_number, severity, int(is_valid), tx_type, flag_count, datetime.utcnow().isoformat())
             )
     except Exception as e:
         print(f"[db] validation log failed: {e}")
 
 def log_match_summary(total: int, matched: int, mismatched: int, missing: int, source: str,
-                      device_id: str = None, user_id: int = None):
+                      device_id: str = None, user_id: int = None, client_id: int = None):
     try:
         with get_conn() as conn:
             conn.cursor().execute(
-                "INSERT INTO match_summaries (device_id, user_id, total, matched, mismatched, missing_in_gstr2b, source, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                (device_id, user_id, total, matched, mismatched, missing, source, datetime.utcnow().isoformat())
+                """INSERT INTO match_summaries
+                (device_id, user_id, client_id, total, matched, mismatched, missing_in_gstr2b, source, created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (device_id, user_id, client_id, total, matched, mismatched, missing, source, datetime.utcnow().isoformat())
             )
     except Exception as e:
         print(f"[db] match summary log failed: {e}")

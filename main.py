@@ -5,10 +5,10 @@ FastAPI backend for AI Tax & Document Audit Assistant.
 """
 from io import BytesIO, StringIO
 import secrets
-import re
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from typing import Optional, List
 
 import db
 import auth
@@ -23,7 +23,8 @@ from schemas import (
     GSTRMatchRequest, GSTRMatchTextRequest, GSTRMatchResponse, MatchResultOut,
     FlagsToDBRequest, FlagsToDBResponse,
     BulkValidateRequest, BulkValidateResponse, BulkResultItem,
-    PDFExportRequest,
+    PDFExportRequest, ClientCreate, ClientOut,
+    VendorOut, VendorDetailOut, VendorTrendPoint, VendorUpdateRequest,
 )
 
 app = FastAPI(title="AI Tax & Document Audit Assistant API", version="1.0.0")
@@ -44,19 +45,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.on_event("startup")
 def _startup():
     db.init_db()
-
 
 @app.get("/api/v1/health")
 def health():
     return {"status": "ok"}
 
+# --- SECURITY HELPER ---
+def verify_client_ownership(client_id: Optional[int], user_id: int):
+    if client_id is not None:
+        if not db.get_client_by_id(client_id, user_id):
+            raise HTTPException(status_code=404, detail="Client not found or access denied.")
 
 # ---------------------------------------------------------------------------
-# Authentication Endpoints
+# Authentication & Access Endpoints
 # ---------------------------------------------------------------------------
 
 @app.post("/api/v1/auth/signup", response_model=AuthResponse)
@@ -101,7 +105,6 @@ def user_status(current_user: dict = Depends(auth.get_current_user)):
         "trial_limit": auth.FREE_TRIAL_LIMIT
     }
 
-
 class RedeemRequest(BaseModel):
     code: str
 
@@ -115,10 +118,8 @@ def redeem_code(payload: RedeemRequest, current_user: dict = Depends(auth.get_cu
         raise HTTPException(status_code=400, detail="Invalid or already-used access code.")
     return {"message": "Access unlocked successfully."}
 
-
 @app.post("/api/v1/admin/generate-code")
 def admin_generate_code(payload: GenerateCodeRequest):
-    # --- SECURE TIMING-ATTACK SAFE COMPARISON ---
     if not secrets.compare_digest(payload.admin_key, auth.ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Invalid admin key.")
 
@@ -127,16 +128,89 @@ def admin_generate_code(payload: GenerateCodeRequest):
     return {"code": code, "duration_days": payload.duration_days}
 
 
+# ---------------------------------------------------------------------------
+# Client Management Endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/v1/clients", response_model=ClientOut)
+def add_client(payload: ClientCreate, current_user: dict = Depends(auth.get_current_user)):
+    try:
+        client = db.create_client(current_user["id"], payload.name, payload.gstin)
+        return client
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to add client: {e}")
+
+@app.get("/api/v1/clients", response_model=List[ClientOut])
+def list_clients(current_user: dict = Depends(auth.get_current_user)):
+    return db.get_clients_by_user(current_user["id"])
+
+@app.get("/api/v1/clients/{client_id}", response_model=ClientOut)
+def get_client(client_id: int, current_user: dict = Depends(auth.get_current_user)):
+    client = db.get_client_by_id(client_id, current_user["id"])
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found or unauthorized access.")
+    return client
+
+@app.delete("/api/v1/clients/{client_id}")
+def delete_client(client_id: int, current_user: dict = Depends(auth.get_current_user)):
+    success = db.delete_client(client_id, current_user["id"])
+    if not success:
+        raise HTTPException(status_code=404, detail="Client not found or unauthorized access.")
+    return {"message": "Client deleted successfully."}
+
+
+# ---------------------------------------------------------------------------
+# Vendor Tracking Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/vendors", response_model=List[VendorOut])
+def list_vendors(current_user: dict = Depends(auth.get_current_user)):
+    return db.get_vendors_by_user(current_user["id"])
+
+@app.get("/api/v1/vendors/{vendor_id}", response_model=VendorDetailOut)
+def get_vendor(vendor_id: int, current_user: dict = Depends(auth.get_current_user)):
+    vendor = db.get_vendor_detail(vendor_id, current_user["id"])
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found or access denied.")
+    return vendor
+
+@app.get("/api/v1/vendors/{vendor_id}/trend", response_model=List[VendorTrendPoint])
+def get_vendor_trend(vendor_id: int, current_user: dict = Depends(auth.get_current_user)):
+    trend = db.get_vendor_trend(vendor_id, current_user["id"])
+    if trend is None:
+        raise HTTPException(status_code=404, detail="Vendor not found or access denied.")
+    return trend
+
+@app.patch("/api/v1/vendors/{vendor_id}")
+def update_vendor(vendor_id: int, payload: VendorUpdateRequest, current_user: dict = Depends(auth.get_current_user)):
+    if payload.trade_name is None:
+        raise HTTPException(status_code=400, detail="Nothing to update.")
+    success = db.update_vendor_trade_name(vendor_id, current_user["id"], payload.trade_name)
+    if not success:
+        raise HTTPException(status_code=404, detail="Vendor not found or access denied.")
+    return {"message": "Vendor updated successfully."}
+
+
+# ---------------------------------------------------------------------------
+# Core Validation & Matching Operations
+# ---------------------------------------------------------------------------
+
 @app.post("/api/v1/validate-invoice", response_model=InvoiceValidateResponse)
 def validate_invoice(payload: InvoiceValidateRequest, current_user: dict = Depends(auth.get_current_user)):
     auth.enforce_trial_limit(current_user)
+    verify_client_ownership(payload.client_id, current_user["id"])
+
+    val_payload = payload.model_dump()
+    client_id = val_payload.pop("client_id", None)
+
     try:
-        result = GSTValidator.validate_invoice(**payload.model_dump())
+        result = GSTValidator.validate_invoice(**val_payload)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Validation error: {e}")
 
     db.log_validation(
         user_id=current_user["id"],
+        client_id=client_id,
         gstin=result.gstin,
         invoice_number=payload.invoice_number,
         severity=result.overall_severity,
@@ -169,7 +243,7 @@ def validate_invoice(payload: InvoiceValidateRequest, current_user: dict = Depen
     )
 
 
-def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_id: int) -> GSTRMatchResponse:
+def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_id: int, client_id: int = None) -> GSTRMatchResponse:
     if not purchase_invoices:
         raise HTTPException(status_code=400, detail="No valid purchase records found.")
 
@@ -194,7 +268,7 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_
     mismatched = sum(1 for r in results if r.status == MatchStatus.MISMATCHED)
     missing = sum(1 for r in results if r.status == MatchStatus.MISSING_IN_GSTR2B)
 
-    db.log_match_summary(total=len(out), matched=matched, mismatched=mismatched, missing=missing, source=source, user_id=user_id)
+    db.log_match_summary(total=len(out), matched=matched, mismatched=mismatched, missing=missing, source=source, user_id=user_id, client_id=client_id)
 
     return GSTRMatchResponse(
         total=len(out),
@@ -208,26 +282,30 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_
 @app.post("/api/v1/match-gstr", response_model=GSTRMatchResponse)
 def match_gstr(payload: GSTRMatchRequest, current_user: dict = Depends(auth.get_current_user)):
     auth.enforce_trial_limit(current_user)
-    return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json", user_id=current_user["id"])
+    verify_client_ownership(payload.client_id, current_user["id"])
+    return _build_match_response(payload.purchase_invoices, payload.gstr2b_invoices, source="json", user_id=current_user["id"], client_id=payload.client_id)
 
 
 @app.post("/api/v1/match-gstr-text", response_model=GSTRMatchResponse)
 def match_gstr_text(payload: GSTRMatchTextRequest, current_user: dict = Depends(auth.get_current_user)):
     auth.enforce_trial_limit(current_user)
+    verify_client_ownership(payload.client_id, current_user["id"])
     purchase_records = gstr_matching.parse_raw_text(payload.purchase_text)
     gstr2b_records = gstr_matching.parse_raw_text(payload.gstr2b_text)
     if not purchase_records or not gstr2b_records:
         raise HTTPException(status_code=400, detail="Could not detect any GSTIN/invoice records in the pasted text.")
-    return _build_match_response(purchase_records, gstr2b_records, source="text", user_id=current_user["id"])
+    return _build_match_response(purchase_records, gstr2b_records, source="text", user_id=current_user["id"], client_id=payload.client_id)
 
 
 @app.post("/api/v1/match-gstr-file", response_model=GSTRMatchResponse)
 async def match_gstr_file(
     purchase_file: UploadFile = File(...),
     gstr2b_file: UploadFile = File(...),
+    client_id: Optional[int] = Form(None),
     current_user: dict = Depends(auth.get_current_user),
 ):
     auth.enforce_trial_limit(current_user)
+    verify_client_ownership(client_id, current_user["id"])
 
     async def parse(file: UploadFile):
         name = (file.filename or "").lower()
@@ -258,7 +336,7 @@ async def match_gstr_file(
     purchase_invoices = await parse(purchase_file)
     gstr2b_invoices = await parse(gstr2b_file)
 
-    return _build_match_response(purchase_invoices, gstr2b_invoices, source="file", user_id=current_user["id"])
+    return _build_match_response(purchase_invoices, gstr2b_invoices, source="file", user_id=current_user["id"], client_id=client_id)
 
 
 @app.post("/api/v1/flags-to-db", response_model=FlagsToDBResponse)
@@ -282,7 +360,9 @@ def flags_to_db(payload: FlagsToDBRequest):
     return FlagsToDBResponse(records=records)
 
 
-def _validate_single(item_dict: dict, user_id: int) -> BulkResultItem:
+# --- BULK PROCESSING ---
+
+def _validate_single(item_dict: dict, user_id: int, client_id: int = None) -> BulkResultItem:
     invoice_number = item_dict.get("invoice_number")
     gstin = item_dict.get("supplier_gstin", "") or ""
 
@@ -315,6 +395,7 @@ def _validate_single(item_dict: dict, user_id: int) -> BulkResultItem:
 
     db.log_validation(
         user_id=user_id,
+        client_id=client_id,
         gstin=result.gstin,
         invoice_number=invoice_number,
         severity=result.overall_severity,
@@ -357,10 +438,11 @@ def _summarize_bulk(results: list) -> BulkValidateResponse:
 @app.post("/api/v1/validate-bulk-invoices", response_model=BulkValidateResponse)
 def validate_bulk_invoices(payload: BulkValidateRequest, current_user: dict = Depends(auth.get_current_user)):
     auth.enforce_trial_limit(current_user)
+    verify_client_ownership(payload.client_id, current_user["id"])
     if not payload.invoices:
         raise HTTPException(status_code=400, detail="No invoices provided.")
 
-    results = [_validate_single(inv.model_dump(), current_user["id"]) for inv in payload.invoices]
+    results = [_validate_single(inv, current_user["id"], payload.client_id) for inv in payload.invoices]
     return _summarize_bulk(results)
 
 
@@ -418,8 +500,13 @@ def _parse_invoice_file(raw: bytes, filename: str) -> list:
 
 
 @app.post("/api/v1/validate-bulk-invoices-file", response_model=BulkValidateResponse)
-async def validate_bulk_invoices_file(file: UploadFile = File(...), current_user: dict = Depends(auth.get_current_user)):
+async def validate_bulk_invoices_file(
+    file: UploadFile = File(...),
+    client_id: Optional[int] = Form(None),
+    current_user: dict = Depends(auth.get_current_user)
+):
     auth.enforce_trial_limit(current_user)
+    verify_client_ownership(client_id, current_user["id"])
     try:
         raw = await file.read()
     except Exception as e:
@@ -429,9 +516,13 @@ async def validate_bulk_invoices_file(file: UploadFile = File(...), current_user
     if not records:
         raise HTTPException(status_code=400, detail="No valid invoice rows found in file.")
 
-    results = [_validate_single(r, current_user["id"]) for r in records]
+    results = [_validate_single(r, current_user["id"], client_id) for r in records]
     return _summarize_bulk(results)
 
+
+# ---------------------------------------------------------------------------
+# PDF Exports & Audit History
+# ---------------------------------------------------------------------------
 
 @app.post("/api/v1/export-audit-pdf")
 def export_audit_pdf(payload: PDFExportRequest):
@@ -504,7 +595,7 @@ def export_validations_csv(
     try:
         _, rows = db.query_validations(user_id=current_user["id"], limit=100000, offset=0, severity=severity,
                                         date_from=date_from, date_to=date_to, search=search)
-        csv_text = _rows_to_csv(rows, ["id", "user_id", "device_id", "gstin", "invoice_number", "overall_severity",
+        csv_text = _rows_to_csv(rows, ["id", "user_id", "device_id", "client_id", "vendor_id", "gstin", "invoice_number", "overall_severity",
                                         "is_valid", "transaction_type", "flag_count", "created_at"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
@@ -519,7 +610,7 @@ def export_matches_csv(
 ):
     try:
         _, rows = db.query_matches(user_id=current_user["id"], limit=100000, offset=0, date_from=date_from, date_to=date_to)
-        csv_text = _rows_to_csv(rows, ["id", "user_id", "device_id", "total", "matched", "mismatched",
+        csv_text = _rows_to_csv(rows, ["id", "user_id", "device_id", "client_id", "total", "matched", "mismatched",
                                         "missing_in_gstr2b", "source", "created_at"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
