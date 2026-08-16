@@ -44,290 +44,433 @@
 </head>
 <body class="min-h-screen">
 
-<!-- ============ ACCESS CODE OVERLAY ============ -->
-<div id="authOverlay" class="fixed inset-0 z-50 hidden items-center justify-center" style="background:rgba(16,24,32,.55);">
-  <div class="card rounded-lg p-8 w-full max-w-sm mx-4">
-    <h2 class="font-display font-semibold text-lg mb-1">Free trial ended</h2>
-    <p class="text-xs mb-5" style="color:#7A7263;">You've used your 3 free checks. Contact <b>+91-8955377472</b> or <b>sohailkhan902314@gmail.com</b> to get an access code.</p>
-    <input id="codeInput" placeholder="GST-XXXXXXXX" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
-    <p id="codeError" class="text-xs mt-2 hidden" style="color:var(--red);"></p>
-    <button onclick="redeemCode()" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-4">Unlock</button>
+<!-- ============ AUTHENTICATION SCREEN ============ -->
+<div id="authScreen" class="min-h-screen flex items-center justify-center p-4">
+  <div class="card rounded-lg p-8 w-full max-w-sm shadow-sm">
+    <h2 id="authTitle" class="font-display font-semibold text-xl mb-1">Login</h2>
+    <p class="text-xs mb-5" style="color:#7A7263;">Access your GST Audit Assistant.</p>
+    <form id="authForm" class="space-y-4">
+      <div>
+        <label class="text-xs font-medium block mb-1">Email</label>
+        <input type="email" id="authEmail" required placeholder="you@company.com" class="w-full px-3 py-2 rounded text-sm font-mono">
+      </div>
+      <div>
+        <label class="text-xs font-medium block mb-1">Password</label>
+        <input type="password" id="authPassword" required minlength="8" placeholder="••••••••" class="w-full px-3 py-2 rounded text-sm font-mono">
+      </div>
+      <button type="submit" id="authBtn" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-2 flex items-center justify-center gap-2">Login</button>
+    </form>
+    <p id="authError" class="text-xs mt-3 hidden text-center font-medium" style="color:var(--red);"></p>
+    <div class="ledger-line my-5"></div>
+    <p class="text-xs text-center" style="color:#7A7263;">
+      <span id="authToggleText">Don't have an account?</span>
+      <button id="authToggleBtn" type="button" class="font-medium underline ml-1 cursor-pointer hover:text-black" style="color:var(--ink);">Sign up</button>
+    </p>
   </div>
 </div>
 
-<header class="border-b" style="border-color:var(--line);">
-  <div class="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <div class="w-9 h-9 rounded-sm flex items-center justify-center font-display font-bold text-lg" style="background:var(--ink); color:var(--paper);">₹</div>
-      <div>
-        <h1 class="font-display font-semibold text-lg tracking-tight leading-none">GST Audit Assistant</h1>
-        <p class="text-xs mt-0.5" style="color:#7A7263;">Invoice validation &amp; GSTR-2B reconciliation</p>
+<!-- ============ MAIN APP OVERLAY & CONTENT ============ -->
+<div id="mainApp" style="display: none;">
+
+  <!-- ============ ACCESS CODE OVERLAY ============ -->
+  <div id="authOverlay" class="fixed inset-0 z-50 hidden items-center justify-center" style="background:rgba(16,24,32,.55);">
+    <div class="card rounded-lg p-8 w-full max-w-sm mx-4">
+      <h2 class="font-display font-semibold text-lg mb-1">Free trial ended</h2>
+      <p class="text-xs mb-5" style="color:#7A7263;">You've used your 3 free checks. Contact <b>+91-8955377472</b> or <b>sohailkhan902314@gmail.com</b> to get an access code.</p>
+      <input id="codeInput" placeholder="GST-XXXXXXXX" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
+      <p id="codeError" class="text-xs mt-2 hidden" style="color:var(--red);"></p>
+      <button onclick="redeemCode()" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-4">Unlock</button>
+      <button onclick="document.getElementById('authOverlay').classList.add('hidden'); document.getElementById('authOverlay').classList.remove('flex');" class="w-full py-2 mt-2 text-xs" style="color:#7A7263;">Cancel</button>
+    </div>
+  </div>
+
+  <header class="border-b" style="border-color:var(--line);">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-sm flex items-center justify-center font-display font-bold text-lg" style="background:var(--ink); color:var(--paper);">₹</div>
+        <div>
+          <h1 class="font-display font-semibold text-lg tracking-tight leading-none">GST Audit Assistant</h1>
+          <p class="text-xs mt-0.5" style="color:#7A7263;">Invoice validation &amp; GSTR-2B reconciliation</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 text-xs font-mono">
+        <span id="userBadge" class="hidden md:inline" style="color:#7A7263;"></span>
+        <button onclick="handleLogout()" class="px-3 py-1.5 rounded transition hover:bg-gray-200" style="border:1px solid var(--line); color:var(--ink);">Logout</button>
+        <div class="flex items-center gap-1.5">
+          <span id="statusDot" class="w-2 h-2 rounded-full hidden sm:inline-block" style="background:#B5451B;"></span>
+          <span id="statusText" class="hidden sm:inline-block" style="color:#7A7263;">checking backend…</span>
+        </div>
       </div>
     </div>
-    <div class="flex items-center gap-4 text-xs font-mono">
-      <span id="userBadge" style="color:#7A7263;"></span>
-      <span id="statusDot" class="w-2 h-2 rounded-full inline-block" style="background:#B5451B;"></span>
-      <span id="statusText" style="color:#7A7263;">checking backend…</span>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-6 py-8">
+
+    <!-- Tabs -->
+    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+      <button onclick="switchTab('validate')" id="tab-validate" class="tab-active px-4 py-2 rounded text-sm font-medium font-display transition">Validate Invoice</button>
+      <button onclick="switchTab('match')" id="tab-match" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">GSTR-2B Match</button>
+      <button onclick="switchTab('bulk')" id="tab-bulk" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">Bulk Validate</button>
+      <button onclick="switchTab('history')" id="tab-history" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">History</button>
     </div>
-  </div>
-</header>
 
-<main class="max-w-6xl mx-auto px-6 py-8">
+    <!-- ================= VALIDATE PANEL ================= -->
+    <section id="panel-validate" class="grid lg:grid-cols-5 gap-6">
+      <div class="lg:col-span-2 card rounded-lg p-6">
+        <h2 class="font-display font-semibold mb-1">Invoice details</h2>
+        <p class="text-xs mb-5" style="color:#7A7263;">Fields marked * are required for validation.</p>
 
-  <!-- Tabs -->
-  <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
-    <button onclick="switchTab('validate')" id="tab-validate" class="tab-active px-4 py-2 rounded text-sm font-medium font-display transition">Validate Invoice</button>
-    <button onclick="switchTab('match')" id="tab-match" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">GSTR-2B Match</button>
-    <button onclick="switchTab('bulk')" id="tab-bulk" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">Bulk Validate</button>
-    <button onclick="switchTab('history')" id="tab-history" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">History</button>
-  </div>
+        <form id="validateForm" class="space-y-4">
+          <div>
+            <label class="text-xs font-medium block mb-1">Supplier GSTIN *</label>
+            <input required name="supplier_gstin" placeholder="27AAPFU0939F1ZV" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
+          </div>
+          <div>
+            <label class="text-xs font-medium block mb-1">Buyer GSTIN</label>
+            <input name="buyer_gstin" placeholder="Optional" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs font-medium block mb-1">Seller state code</label>
+              <input name="seller_state_code" placeholder="Optional" class="w-full px-3 py-2 rounded text-sm font-mono">
+            </div>
+            <div>
+              <label class="text-xs font-medium block mb-1">Place of supply *</label>
+              <input required name="place_of_supply_code" placeholder="e.g. 27" class="w-full px-3 py-2 rounded text-sm font-mono">
+            </div>
+          </div>
+          <div>
+            <label class="text-xs font-medium block mb-1">Invoice number</label>
+            <input name="invoice_number" placeholder="INV-001" class="w-full px-3 py-2 rounded text-sm font-mono">
+          </div>
+          <div class="ledger-line pt-4">
+            <label class="text-xs font-medium block mb-1">Taxable amount (₹) *</label>
+            <input required type="number" step="0.01" name="taxable_amount" placeholder="100000" class="w-full px-3 py-2 rounded text-sm font-mono">
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="text-xs font-medium block mb-1">CGST</label>
+              <input type="number" step="0.01" name="cgst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
+            </div>
+            <div>
+              <label class="text-xs font-medium block mb-1">SGST</label>
+              <input type="number" step="0.01" name="sgst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
+            </div>
+            <div>
+              <label class="text-xs font-medium block mb-1">IGST</label>
+              <input type="number" step="0.01" name="igst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
+            </div>
+          </div>
+          <div>
+            <label class="text-xs font-medium block mb-1">Item tax rate (%)</label>
+            <select name="item_tax_rate" class="w-full px-3 py-2 rounded text-sm font-mono">
+              <option value="0">0%</option><option value="5">5%</option><option value="12">12%</option>
+              <option value="18" selected>18%</option><option value="28">28%</option>
+            </select>
+          </div>
+          <button type="submit" id="validateBtn" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-2 flex items-center justify-center gap-2">
+            Run validation
+          </button>
+        </form>
+      </div>
 
-  <!-- ================= VALIDATE PANEL ================= -->
-  <section id="panel-validate" class="grid lg:grid-cols-5 gap-6">
-    <div class="lg:col-span-2 card rounded-lg p-6">
-      <h2 class="font-display font-semibold mb-1">Invoice details</h2>
-      <p class="text-xs mb-5" style="color:#7A7263;">Fields marked * are required for validation.</p>
+      <div class="lg:col-span-3 space-y-4">
+        <div id="validateEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+          <div class="font-mono text-xs">— NO RESULT YET —</div>
+          <p class="text-sm mt-2">Fill the form and run validation to see results here.</p>
+        </div>
+        <div id="validateResult" class="hidden space-y-4"></div>
+      </div>
+    </section>
 
-      <form id="validateForm" class="space-y-4">
+    <!-- ================= MATCH PANEL ================= -->
+    <section id="panel-match" class="hidden">
+      <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+        <button onclick="switchMatchMode('json')" id="mmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
+        <button onclick="switchMatchMode('csv')" id="mmode-csv" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
+        <button onclick="switchMatchMode('text')" id="mmode-text" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste Text</button>
+      </div>
+
+      <div id="matchModeText" class="hidden grid lg:grid-cols-2 gap-6 mb-6">
+        <div class="card rounded-lg p-6">
+          <h2 class="font-display font-semibold mb-1">Purchase invoices (raw text)</h2>
+          <p class="text-xs mb-3" style="color:#7A7263;">Paste directly from portal, Tally, WhatsApp — GSTIN detected automatically.</p>
+          <textarea id="purchaseText" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false" placeholder="Invoice 32  27AAPFU0939F1ZV  tax 1800.50&#10;Invoice 45  24BAPPT7897A1Z3  amount 4500"></textarea>
+        </div>
+        <div class="card rounded-lg p-6">
+          <h2 class="font-display font-semibold mb-1">GSTR-2B (raw text)</h2>
+          <p class="text-xs mb-3" style="color:#7A7263;">Paste directly from GST portal screen or PDF copy.</p>
+          <textarea id="gstr2bText" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false" placeholder="Invoice 32  27AAPFU0939F1ZV  tax 1800.50"></textarea>
+        </div>
+        <div class="lg:col-span-2">
+          <button id="matchTextBtn" onclick="runMatchText()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
+            Parse &amp; reconcile
+          </button>
+        </div>
+      </div>
+
+      <div id="matchModeJson" class="grid lg:grid-cols-2 gap-6 mb-6">
+        <div class="card rounded-lg p-6">
+          <h2 class="font-display font-semibold mb-1">Purchase invoices</h2>
+          <p class="text-xs mb-3" style="color:#7A7263;">JSON array — your books.</p>
+          <textarea id="purchaseJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
+        </div>
+        <div class="card rounded-lg p-6">
+          <h2 class="font-display font-semibold mb-1">GSTR-2B invoices</h2>
+          <p class="text-xs mb-3" style="color:#7A7263;">JSON array — portal records.</p>
+          <textarea id="gstr2bJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
+        </div>
+        <div class="lg:col-span-2">
+          <button id="matchBtn" onclick="runMatch()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
+            Run reconciliation
+          </button>
+        </div>
+      </div>
+
+      <div id="matchModeCsv" class="hidden grid lg:grid-cols-2 gap-6 mb-6">
+        <div class="card rounded-lg p-6">
+          <h2 class="font-display font-semibold mb-1">Purchase invoices file</h2>
+          <p class="text-xs mb-3" style="color:#7A7263;">CSV or Excel — columns: invoice_number, supplier_gstin, tax_amount</p>
+          <input type="file" id="purchaseCsv" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
+        </div>
+        <div class="card rounded-lg p-6">
+          <h2 class="font-display font-semibold mb-1">GSTR-2B file</h2>
+          <p class="text-xs mb-3" style="color:#7A7263;">CSV or Excel — columns: invoice_number, supplier_gstin, tax_amount</p>
+          <input type="file" id="gstr2bCsv" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
+        </div>
+        <div class="lg:col-span-2">
+          <button id="matchCsvBtn" onclick="runMatchCsv()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
+            Upload &amp; reconcile
+          </button>
+        </div>
+      </div>
+
+      <div id="matchEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+        <div class="font-mono text-xs">— NO RESULT YET —</div>
+        <p class="text-sm mt-2">Sample data is pre-filled, or upload CSVs above.</p>
+      </div>
+      <div id="matchResult" class="hidden space-y-4"></div>
+    </section>
+
+    <!-- ================= BULK VALIDATE PANEL ================= -->
+    <section id="panel-bulk" class="hidden">
+      <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+        <button onclick="switchBulkMode('json')" id="bmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
+        <button onclick="switchBulkMode('file')" id="bmode-file" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
+      </div>
+
+      <div id="bulkModeJson" class="card rounded-lg p-6 mb-6">
+        <h2 class="font-display font-semibold mb-1">Invoices (JSON array)</h2>
+        <p class="text-xs mb-3" style="color:#7A7263;">Each item: supplier_gstin, place_of_supply_code, taxable_amount, cgst_amount, sgst_amount, igst_amount, invoice_number, item_tax_rate</p>
+        <textarea id="bulkJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
+        <button id="bulkJsonBtn" onclick="runBulkJson()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm mt-4 flex items-center gap-2">Run bulk validation</button>
+      </div>
+
+      <div id="bulkModeFile" class="hidden card rounded-lg p-6 mb-6">
+        <h2 class="font-display font-semibold mb-1">Upload CSV / Excel</h2>
+        <p class="text-xs mb-3" style="color:#7A7263;">Columns: supplier_gstin, place_of_supply_code, taxable_amount, cgst_amount, sgst_amount, igst_amount, invoice_number, item_tax_rate</p>
+        <input type="file" id="bulkFile" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
+        <button id="bulkFileBtn" onclick="runBulkFile()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm mt-4 flex items-center gap-2">Upload &amp; validate</button>
+      </div>
+
+      <div id="bulkEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+        <div class="font-mono text-xs">— NO RESULT YET —</div>
+        <p class="text-sm mt-2">Paste JSON or upload a file to validate multiple invoices at once.</p>
+      </div>
+      <div id="bulkResult" class="hidden space-y-4"></div>
+    </section>
+
+    <!-- ================= HISTORY PANEL ================= -->
+    <section id="panel-history" class="hidden">
+      <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+        <button onclick="switchHistMode('validations')" id="hmode-validations" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Validations</button>
+        <button onclick="switchHistMode('matches')" id="hmode-matches" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">GSTR-2B Matches</button>
+      </div>
+
+      <div class="card rounded-lg p-4 mb-6 grid md:grid-cols-5 gap-3 items-end">
         <div>
-          <label class="text-xs font-medium block mb-1">Supplier GSTIN *</label>
-          <input required name="supplier_gstin" placeholder="27AAPFU0939F1ZV" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
+          <label class="text-xs font-medium block mb-1">From</label>
+          <input type="date" id="histDateFrom" class="w-full px-3 py-2 rounded text-sm font-mono">
         </div>
         <div>
-          <label class="text-xs font-medium block mb-1">Buyer GSTIN</label>
-          <input name="buyer_gstin" placeholder="Optional" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
+          <label class="text-xs font-medium block mb-1">To</label>
+          <input type="date" id="histDateTo" class="w-full px-3 py-2 rounded text-sm font-mono">
         </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="text-xs font-medium block mb-1">Seller state code</label>
-            <input name="seller_state_code" placeholder="Optional" class="w-full px-3 py-2 rounded text-sm font-mono">
-          </div>
-          <div>
-            <label class="text-xs font-medium block mb-1">Place of supply *</label>
-            <input required name="place_of_supply_code" placeholder="e.g. 27" class="w-full px-3 py-2 rounded text-sm font-mono">
-          </div>
-        </div>
-        <div>
-          <label class="text-xs font-medium block mb-1">Invoice number</label>
-          <input name="invoice_number" placeholder="INV-001" class="w-full px-3 py-2 rounded text-sm font-mono">
-        </div>
-        <div class="ledger-line pt-4">
-          <label class="text-xs font-medium block mb-1">Taxable amount (₹) *</label>
-          <input required type="number" step="0.01" name="taxable_amount" placeholder="100000" class="w-full px-3 py-2 rounded text-sm font-mono">
-        </div>
-        <div class="grid grid-cols-3 gap-3">
-          <div>
-            <label class="text-xs font-medium block mb-1">CGST</label>
-            <input type="number" step="0.01" name="cgst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
-          </div>
-          <div>
-            <label class="text-xs font-medium block mb-1">SGST</label>
-            <input type="number" step="0.01" name="sgst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
-          </div>
-          <div>
-            <label class="text-xs font-medium block mb-1">IGST</label>
-            <input type="number" step="0.01" name="igst_amount" placeholder="0" class="w-full px-3 py-2 rounded text-sm font-mono">
-          </div>
-        </div>
-        <div>
-          <label class="text-xs font-medium block mb-1">Item tax rate (%)</label>
-          <select name="item_tax_rate" class="w-full px-3 py-2 rounded text-sm font-mono">
-            <option value="0">0%</option><option value="5">5%</option><option value="12">12%</option>
-            <option value="18" selected>18%</option><option value="28">28%</option>
+        <div id="histSeverityWrap">
+          <label class="text-xs font-medium block mb-1">Severity</label>
+          <select id="histSeverity" class="w-full px-3 py-2 rounded text-sm font-mono">
+            <option value="">All</option><option value="GREEN">Green</option>
+            <option value="YELLOW">Yellow</option><option value="RED">Red</option>
           </select>
         </div>
-        <button type="submit" id="validateBtn" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-2 flex items-center justify-center gap-2">
-          Run validation
-        </button>
-      </form>
-    </div>
-
-    <div class="lg:col-span-3 space-y-4">
-      <div id="validateEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
-        <div class="font-mono text-xs">— NO RESULT YET —</div>
-        <p class="text-sm mt-2">Fill the form and run validation to see results here.</p>
+        <div id="histSearchWrap">
+          <label class="text-xs font-medium block mb-1">Search (GSTIN / Invoice #)</label>
+          <input id="histSearch" placeholder="Search..." class="w-full px-3 py-2 rounded text-sm font-mono">
+        </div>
+        <button onclick="loadHistory(0)" class="btn-primary px-4 py-2 rounded font-display font-medium text-sm">Apply filters</button>
+        <button onclick="downloadHistoryCsv()" class="px-4 py-2 rounded font-display font-medium text-sm" style="border:1px solid var(--ink);">Download CSV</button>
       </div>
-      <div id="validateResult" class="hidden space-y-4"></div>
-    </div>
-  </section>
 
-  <!-- ================= MATCH PANEL ================= -->
-  <section id="panel-match" class="hidden">
-    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
-      <button onclick="switchMatchMode('json')" id="mmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
-      <button onclick="switchMatchMode('csv')" id="mmode-csv" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
-      <button onclick="switchMatchMode('text')" id="mmode-text" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste Text</button>
-    </div>
+      <div id="histEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+        <div class="font-mono text-xs">— LOADING —</div>
+      </div>
+      <div id="histResult" class="hidden space-y-4"></div>
+    </section>
 
-    <div id="matchModeText" class="hidden grid lg:grid-cols-2 gap-6 mb-6">
-      <div class="card rounded-lg p-6">
-        <h2 class="font-display font-semibold mb-1">Purchase invoices (raw text)</h2>
-        <p class="text-xs mb-3" style="color:#7A7263;">Paste directly from portal, Tally, WhatsApp — GSTIN detected automatically.</p>
-        <textarea id="purchaseText" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false" placeholder="Invoice 32  27AAPFU0939F1ZV  tax 1800.50&#10;Invoice 45  24BAPPT7897A1Z3  amount 4500"></textarea>
-      </div>
-      <div class="card rounded-lg p-6">
-        <h2 class="font-display font-semibold mb-1">GSTR-2B (raw text)</h2>
-        <p class="text-xs mb-3" style="color:#7A7263;">Paste directly from GST portal screen or PDF copy.</p>
-        <textarea id="gstr2bText" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false" placeholder="Invoice 32  27AAPFU0939F1ZV  tax 1800.50"></textarea>
-      </div>
-      <div class="lg:col-span-2">
-        <button id="matchTextBtn" onclick="runMatchText()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
-          Parse &amp; reconcile
-        </button>
-      </div>
-    </div>
-
-    <div id="matchModeJson" class="grid lg:grid-cols-2 gap-6 mb-6">
-      <div class="card rounded-lg p-6">
-        <h2 class="font-display font-semibold mb-1">Purchase invoices</h2>
-        <p class="text-xs mb-3" style="color:#7A7263;">JSON array — your books.</p>
-        <textarea id="purchaseJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
-      </div>
-      <div class="card rounded-lg p-6">
-        <h2 class="font-display font-semibold mb-1">GSTR-2B invoices</h2>
-        <p class="text-xs mb-3" style="color:#7A7263;">JSON array — portal records.</p>
-        <textarea id="gstr2bJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
-      </div>
-      <div class="lg:col-span-2">
-        <button id="matchBtn" onclick="runMatch()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
-          Run reconciliation
-        </button>
-      </div>
-    </div>
-
-    <div id="matchModeCsv" class="hidden grid lg:grid-cols-2 gap-6 mb-6">
-      <div class="card rounded-lg p-6">
-        <h2 class="font-display font-semibold mb-1">Purchase invoices file</h2>
-        <p class="text-xs mb-3" style="color:#7A7263;">CSV or Excel — columns: invoice_number, supplier_gstin, tax_amount</p>
-        <input type="file" id="purchaseCsv" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
-      </div>
-      <div class="card rounded-lg p-6">
-        <h2 class="font-display font-semibold mb-1">GSTR-2B file</h2>
-        <p class="text-xs mb-3" style="color:#7A7263;">CSV or Excel — columns: invoice_number, supplier_gstin, tax_amount</p>
-        <input type="file" id="gstr2bCsv" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
-      </div>
-      <div class="lg:col-span-2">
-        <button id="matchCsvBtn" onclick="runMatchCsv()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm flex items-center gap-2">
-          Upload &amp; reconcile
-        </button>
-      </div>
-    </div>
-
-    <div id="matchEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
-      <div class="font-mono text-xs">— NO RESULT YET —</div>
-      <p class="text-sm mt-2">Sample data is pre-filled, or upload CSVs above.</p>
-    </div>
-    <div id="matchResult" class="hidden space-y-4"></div>
-  </section>
-
-  <!-- ================= BULK VALIDATE PANEL ================= -->
-  <section id="panel-bulk" class="hidden">
-    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
-      <button onclick="switchBulkMode('json')" id="bmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
-      <button onclick="switchBulkMode('file')" id="bmode-file" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
-    </div>
-
-    <div id="bulkModeJson" class="card rounded-lg p-6 mb-6">
-      <h2 class="font-display font-semibold mb-1">Invoices (JSON array)</h2>
-      <p class="text-xs mb-3" style="color:#7A7263;">Each item: supplier_gstin, place_of_supply_code, taxable_amount, cgst_amount, sgst_amount, igst_amount, invoice_number, item_tax_rate</p>
-      <textarea id="bulkJson" class="w-full h-56 px-3 py-2 rounded text-xs font-mono" spellcheck="false"></textarea>
-      <button id="bulkJsonBtn" onclick="runBulkJson()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm mt-4 flex items-center gap-2">Run bulk validation</button>
-    </div>
-
-    <div id="bulkModeFile" class="hidden card rounded-lg p-6 mb-6">
-      <h2 class="font-display font-semibold mb-1">Upload CSV / Excel</h2>
-      <p class="text-xs mb-3" style="color:#7A7263;">Columns: supplier_gstin, place_of_supply_code, taxable_amount, cgst_amount, sgst_amount, igst_amount, invoice_number, item_tax_rate</p>
-      <input type="file" id="bulkFile" accept=".csv,.xlsx,.xls" class="w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium" style="background:var(--paper); border:1px solid var(--line); padding:8px;">
-      <button id="bulkFileBtn" onclick="runBulkFile()" class="btn-primary px-6 py-2.5 rounded font-display font-medium text-sm mt-4 flex items-center gap-2">Upload &amp; validate</button>
-    </div>
-
-    <div id="bulkEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
-      <div class="font-mono text-xs">— NO RESULT YET —</div>
-      <p class="text-sm mt-2">Paste JSON or upload a file to validate multiple invoices at once.</p>
-    </div>
-    <div id="bulkResult" class="hidden space-y-4"></div>
-  </section>
-
-  <!-- ================= HISTORY PANEL ================= -->
-  <section id="panel-history" class="hidden">
-    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
-      <button onclick="switchHistMode('validations')" id="hmode-validations" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Validations</button>
-      <button onclick="switchHistMode('matches')" id="hmode-matches" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">GSTR-2B Matches</button>
-    </div>
-
-    <div class="card rounded-lg p-4 mb-6 grid md:grid-cols-5 gap-3 items-end">
-      <div>
-        <label class="text-xs font-medium block mb-1">From</label>
-        <input type="date" id="histDateFrom" class="w-full px-3 py-2 rounded text-sm font-mono">
-      </div>
-      <div>
-        <label class="text-xs font-medium block mb-1">To</label>
-        <input type="date" id="histDateTo" class="w-full px-3 py-2 rounded text-sm font-mono">
-      </div>
-      <div id="histSeverityWrap">
-        <label class="text-xs font-medium block mb-1">Severity</label>
-        <select id="histSeverity" class="w-full px-3 py-2 rounded text-sm font-mono">
-          <option value="">All</option><option value="GREEN">Green</option>
-          <option value="YELLOW">Yellow</option><option value="RED">Red</option>
-        </select>
-      </div>
-      <div id="histSearchWrap">
-        <label class="text-xs font-medium block mb-1">Search (GSTIN / Invoice #)</label>
-        <input id="histSearch" placeholder="Search..." class="w-full px-3 py-2 rounded text-sm font-mono">
-      </div>
-      <button onclick="loadHistory(0)" class="btn-primary px-4 py-2 rounded font-display font-medium text-sm">Apply filters</button>
-      <button onclick="downloadHistoryCsv()" class="px-4 py-2 rounded font-display font-medium text-sm" style="border:1px solid var(--ink);">Download CSV</button>
-    </div>
-
-    <div id="histEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
-      <div class="font-mono text-xs">— LOADING —</div>
-    </div>
-    <div id="histResult" class="hidden space-y-4"></div>
-  </section>
-
-</main>
+  </main>
+</div>
 
 <script>
 const API = 'https://taxaudit-pro.onrender.com';
 
-// ---------- device-based trial ----------
-function getDeviceId(){
-  let id = localStorage.getItem('device_id');
-  if(!id){ id = 'dev-' + crypto.randomUUID(); localStorage.setItem('device_id', id); }
-  return id;
-}
-const DEVICE_ID = getDeviceId();
-function authHeaders(){ return {'X-Device-Id': DEVICE_ID}; }
+// ---------- AUTHENTICATION & API WRAPPER ----------
+let isSignupMode = false;
+const authScreen = document.getElementById("authScreen");
+const mainApp = document.getElementById("mainApp");
+const authForm = document.getElementById("authForm");
+const authTitle = document.getElementById("authTitle");
+const authBtn = document.getElementById("authBtn");
+const authToggleText = document.getElementById("authToggleText");
+const authToggleBtn = document.getElementById("authToggleBtn");
+const authError = document.getElementById("authError");
+const userBadge = document.getElementById("userBadge");
 
-function updateBadge(status){
-  const badge = document.getElementById('userBadge');
-  badge.textContent = status.is_paid
-    ? `PAID ACCOUNT${status.paid_until ? ' · valid till ' + status.paid_until.slice(0,10) : ''}`
-    : `${status.trial_used}/${status.trial_limit} free checks used`;
-}
-async function refreshDeviceStatus(){
-  try{
-    const res = await fetch(API + '/api/v1/device/status', { headers: authHeaders() });
-    const data = await res.json();
-    if(res.ok) updateBadge(data);
-  }catch(e){}
-}
-refreshDeviceStatus();
+// Core API Wrapper (Replaces raw fetch for authenticated requests)
+async function apiFetch(endpoint, options = {}) {
+    const token = localStorage.getItem("authToken");
+    if (!options.headers) options.headers = {};
+    if (token) {
+        options.headers["Authorization"] = `Bearer ${token}`;
+    }
+    // Set default Content-Type if not sending FormData
+    if (!options.headers["Content-Type"] && !(options.body instanceof FormData)) {
+        options.headers["Content-Type"] = "application/json";
+    }
 
+    const res = await fetch(API + endpoint, options);
+    
+    // Globally handle 401 Unauthorized (Token expired/invalid)
+    if (res.status === 401) {
+        handleLogout();
+        throw new Error("Session expired. Please login again.");
+    }
+    return res;
+}
+
+// UI Toggles
+authToggleBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    isSignupMode = !isSignupMode;
+    authTitle.textContent = isSignupMode ? "Sign Up" : "Login";
+    authBtn.textContent = isSignupMode ? "Sign Up" : "Login";
+    authToggleText.textContent = isSignupMode ? "Already have an account?" : "Don't have an account?";
+    authToggleBtn.textContent = isSignupMode ? "Login" : "Sign up";
+    authError.classList.add("hidden");
+});
+
+// Login / Signup Submit
+authForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    authError.classList.add("hidden");
+    setLoading(authBtn, true, isSignupMode ? 'Sign Up' : 'Login');
+
+    const email = document.getElementById("authEmail").value;
+    const password = document.getElementById("authPassword").value;
+    const endpoint = isSignupMode ? '/api/v1/auth/signup' : '/api/v1/auth/login';
+
+    try {
+        const res = await fetch(API + endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+        
+        if (!res.ok) throw new Error(data.detail || "Authentication failed");
+
+        // Save token and initialize app
+        localStorage.setItem("authToken", data.token);
+        authForm.reset();
+        await checkAuth();
+
+    } catch (error) {
+        authError.textContent = error.message;
+        authError.classList.remove("hidden");
+    } finally {
+        setLoading(authBtn, false, isSignupMode ? 'Sign Up' : 'Login');
+    }
+});
+
+// Check Auth state on load
+async function checkAuth() {
+    const token = localStorage.getItem("authToken");
+    if (!token) {
+        authScreen.style.display = "flex";
+        mainApp.style.display = "none";
+        return;
+    }
+
+    try {
+        const res = await apiFetch('/api/v1/user/status');
+        if (res.ok) {
+            const userData = await res.json();
+            
+            // Setup User Badge
+            const statusHtml = userData.is_paid 
+                ? `<span style="color:var(--green)">PAID (till ${userData.paid_until.slice(0,10)})</span>`
+                : `<span style="color:var(--yellow)">TRIAL (${userData.trial_used}/${userData.trial_limit})</span>`;
+            userBadge.innerHTML = `<span class="font-semibold" style="color:var(--ink)">${escapeHtml(userData.email)}</span> | ${statusHtml}`;
+            
+            authScreen.style.display = "none";
+            mainApp.style.display = "block";
+            checkHealth(); // Start health polling for backend
+        }
+    } catch (e) {
+        // Will be caught and logged out by apiFetch if 401
+    }
+}
+
+function handleLogout() {
+    localStorage.removeItem("authToken");
+    authScreen.style.display = "flex";
+    mainApp.style.display = "none";
+    document.getElementById("authPassword").value = "";
+}
+
+// Run auth check initially
+checkAuth();
+
+// ---------- health check (retries while Render free-tier backend cold-starts) ----------
+function checkHealth(attempt){
+  attempt = attempt || 1;
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  if(!txt) return;
+  
+  txt.textContent = attempt===1 ? 'checking backend…' : 'waking backend… (' + attempt + ')';
+  fetch(API + '/api/v1/health').then(r=>{
+    if(r.ok){ dot.style.background='#1E6B4E'; txt.textContent='backend online'; }
+    else throw new Error();
+  }).catch(()=>{
+    if(attempt < 15){ setTimeout(()=>checkHealth(attempt+1), 4000); }
+    else { dot.style.background='var(--red)'; txt.textContent='backend unreachable'; }
+  });
+}
+
+// ---------- REDEEM CODE ----------
 async function redeemCode(){
   const code = document.getElementById('codeInput').value.trim();
   const errEl = document.getElementById('codeError');
   errEl.classList.add('hidden');
   try{
-    const res = await fetch(API + '/api/v1/access/redeem', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({device_id: DEVICE_ID, code})
+    const res = await apiFetch('/api/v1/access/redeem', {
+      method:'POST', body: JSON.stringify({code})
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.detail || 'Invalid code');
     document.getElementById('authOverlay').classList.add('hidden');
     document.getElementById('authOverlay').classList.remove('flex');
-    refreshDeviceStatus();
+    checkAuth(); // Refresh user status
   }catch(err){
     errEl.textContent = err.message; errEl.classList.remove('hidden');
   }
@@ -336,20 +479,6 @@ function showUnlockOverlay(){
   const el = document.getElementById('authOverlay');
   el.classList.remove('hidden'); el.classList.add('flex');
 }
-
-// ---------- health check (retries while Render free-tier backend cold-starts) ----------
-function checkHealth(attempt){
-  attempt = attempt || 1;
-  document.getElementById('statusText').textContent = attempt===1 ? 'checking backend…' : 'waking backend… (' + attempt + ')';
-  fetch(API + '/api/v1/health').then(r=>{
-    if(r.ok){ document.getElementById('statusDot').style.background='#1E6B4E'; document.getElementById('statusText').textContent='backend online'; }
-    else throw new Error();
-  }).catch(()=>{
-    if(attempt < 15){ setTimeout(()=>checkHealth(attempt+1), 4000); }
-    else { document.getElementById('statusText').textContent='backend unreachable'; }
-  });
-}
-checkHealth();
 
 // ---------- tabs ----------
 function switchTab(name){
@@ -410,14 +539,14 @@ document.getElementById('validateForm').addEventListener('submit', async (e)=>{
   resultEl.innerHTML = '';
 
   try{
-    const res = await fetch(API + '/api/v1/validate-invoice', {
-      method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify(payload)
+    const res = await apiFetch('/api/v1/validate-invoice', {
+      method:'POST', body: JSON.stringify(payload)
     });
     const data = await res.json();
     if(!res.ok){ throw new Error(data.detail || 'Validation failed'); }
     renderValidateResult(data);
   }catch(err){
-    if(err.message.includes("trial limit")) showUnlockOverlay();
+    if(err.message && err.message.includes("trial limit")) showUnlockOverlay();
     resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
   }finally{
     setLoading(btn, false, 'Run validation');
@@ -493,15 +622,14 @@ async function runMatchText(){
   resultEl.innerHTML = '';
 
   try{
-    const res = await fetch(API + '/api/v1/match-gstr-text', {
-      method:'POST', headers: {...authHeaders(), 'Content-Type':'application/json'},
-      body: JSON.stringify({purchase_text, gstr2b_text})
+    const res = await apiFetch('/api/v1/match-gstr-text', {
+      method:'POST', body: JSON.stringify({purchase_text, gstr2b_text})
     });
     const data = await res.json();
     if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
     renderMatchResult(data);
   }catch(err){
-    if(err.message.includes("trial limit")) showUnlockOverlay();
+    if(err.message && err.message.includes("trial limit")) showUnlockOverlay();
     resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
   }finally{
     setLoading(btn, false, 'Parse &amp; reconcile');
@@ -527,12 +655,12 @@ async function runMatchCsv(){
   fd.append('gstr2b_file', gFile);
 
   try{
-    const res = await fetch(API + '/api/v1/match-gstr-file', { method:'POST', headers: authHeaders(), body: fd });
+    const res = await apiFetch('/api/v1/match-gstr-file', { method:'POST', body: fd });
     const data = await res.json();
     if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
     renderMatchResult(data);
   }catch(err){
-    if(err.message.includes("trial limit")) showUnlockOverlay();
+    if(err.message && err.message.includes("trial limit")) showUnlockOverlay();
     resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
   }finally{
     setLoading(btn, false, 'Upload &amp; reconcile');
@@ -559,15 +687,14 @@ async function runMatch(){
   resultEl.innerHTML = '';
 
   try{
-    const res = await fetch(API + '/api/v1/match-gstr', {
-      method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()},
-      body: JSON.stringify({purchase_invoices: purchase, gstr2b_invoices: gstr2b})
+    const res = await apiFetch('/api/v1/match-gstr', {
+      method:'POST', body: JSON.stringify({purchase_invoices: purchase, gstr2b_invoices: gstr2b})
     });
     const data = await res.json();
     if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
     renderMatchResult(data);
   }catch(err){
-    if(err.message.includes("trial limit")) showUnlockOverlay();
+    if(err.message && err.message.includes("trial limit")) showUnlockOverlay();
     resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
   }finally{
     setLoading(btn, false, 'Run reconciliation');
@@ -616,8 +743,8 @@ async function downloadMatchPdf(){
     results: data.results
   };
   try{
-    const res = await fetch(API + '/api/v1/export-match-pdf', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    const res = await apiFetch('/api/v1/export-match-pdf', {
+      method:'POST', body: JSON.stringify(payload)
     });
     if(!res.ok) throw new Error('PDF generation failed');
     const blob = await res.blob();
@@ -656,14 +783,14 @@ async function runBulkJson(){
   resultEl.classList.remove('hidden'); resultEl.innerHTML = '';
 
   try{
-    const res = await fetch(API + '/api/v1/validate-bulk-invoices', {
-      method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()}, body: JSON.stringify({invoices})
+    const res = await apiFetch('/api/v1/validate-bulk-invoices', {
+      method:'POST', body: JSON.stringify({invoices})
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.detail || 'Bulk validation failed');
     renderBulkResult(data);
   }catch(err){
-    if(err.message.includes("trial limit")) showUnlockOverlay();
+    if(err.message && err.message.includes("trial limit")) showUnlockOverlay();
     resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
   }finally{ setLoading(btn, false, 'Run bulk validation'); }
 }
@@ -680,12 +807,12 @@ async function runBulkFile(){
 
   const fd = new FormData(); fd.append('file', file);
   try{
-    const res = await fetch(API + '/api/v1/validate-bulk-invoices-file', { method:'POST', headers: authHeaders(), body: fd });
+    const res = await apiFetch('/api/v1/validate-bulk-invoices-file', { method:'POST', body: fd });
     const data = await res.json();
     if(!res.ok) throw new Error(data.detail || 'Bulk validation failed');
     renderBulkResult(data);
   }catch(err){
-    if(err.message.includes("trial limit")) showUnlockOverlay();
+    if(err.message && err.message.includes("trial limit")) showUnlockOverlay();
     resultEl.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
   }finally{ setLoading(btn, false, 'Upload & validate'); }
 }
@@ -731,8 +858,8 @@ async function downloadPdf(){
     results: data.results
   };
   try{
-    const res = await fetch(API + '/api/v1/export-audit-pdf', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    const res = await apiFetch('/api/v1/export-audit-pdf', {
+      method:'POST', body: JSON.stringify(payload)
     });
     if(!res.ok) throw new Error('PDF generation failed');
     const blob = await res.blob();
@@ -761,24 +888,38 @@ function switchHistMode(mode){
   loadHistory(0);
 }
 
-function downloadHistoryCsv(){
+// Fixed CSV download to use JWT token API wrapper
+async function downloadHistoryCsv(){
   const dateFrom = document.getElementById('histDateFrom').value;
   const dateTo = document.getElementById('histDateTo').value;
   const params = new URLSearchParams();
   if(dateFrom) params.set('date_from', dateFrom);
   if(dateTo) params.set('date_to', dateTo);
 
-  let url;
+  let endpoint;
   if(histMode === 'validations'){
     const severity = document.getElementById('histSeverity').value;
     const search = document.getElementById('histSearch').value.trim();
     if(severity) params.set('severity', severity);
     if(search) params.set('search', search);
-    url = API + '/api/v1/audit-history/validations/export-csv?' + params.toString();
+    endpoint = '/api/v1/audit-history/validations/export-csv?' + params.toString();
   } else {
-    url = API + '/api/v1/audit-history/matches/export-csv?' + params.toString();
+    endpoint = '/api/v1/audit-history/matches/export-csv?' + params.toString();
   }
-  window.open(url, '_blank');
+  
+  try {
+      const res = await apiFetch(endpoint);
+      if(!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = histMode === 'validations' ? 'validation_history.csv' : 'match_history.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+  } catch(err) {
+      alert("Failed to download CSV: " + err.message);
+  }
 }
 
 async function loadHistory(offset){
@@ -794,19 +935,19 @@ async function loadHistory(offset){
   if(dateFrom) params.set('date_from', dateFrom);
   if(dateTo) params.set('date_to', dateTo);
 
-  let url;
+  let endpoint;
   if(histMode === 'validations'){
     const severity = document.getElementById('histSeverity').value;
     const search = document.getElementById('histSearch').value.trim();
     if(severity) params.set('severity', severity);
     if(search) params.set('search', search);
-    url = API + '/api/v1/audit-history/validations?' + params.toString();
+    endpoint = '/api/v1/audit-history/validations?' + params.toString();
   } else {
-    url = API + '/api/v1/audit-history/matches?' + params.toString();
+    endpoint = '/api/v1/audit-history/matches?' + params.toString();
   }
 
   try{
-    const res = await fetch(url);
+    const res = await apiFetch(endpoint);
     const data = await res.json();
     if(!res.ok) throw new Error(data.detail || 'Could not load history');
     emptyEl.classList.add('hidden');
