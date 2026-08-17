@@ -11,3 +11,4 @@ passlib[bcrypt]
 bcrypt==4.0.1
 python-jose[cryptography]
 email-validator
+pydantic==2.9.2
