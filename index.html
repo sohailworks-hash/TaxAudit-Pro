@@ -40,6 +40,8 @@
   .spinner{ border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; width:16px; height:16px; animation:spin .7s linear infinite; }
   @keyframes spin{ to{ transform:rotate(360deg); } }
   @media (prefers-reduced-motion: reduce){ .spinner{ animation:none; } }
+  .row-clickable{ cursor:pointer; }
+  .row-clickable:hover{ background:var(--accent-soft); }
 </style>
 </head>
 <body class="min-h-screen">
@@ -115,10 +117,12 @@
   <main class="max-w-6xl mx-auto px-6 py-8">
 
     <!-- Tabs -->
-    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
+    <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card flex-wrap">
       <button onclick="switchTab('validate')" id="tab-validate" class="tab-active px-4 py-2 rounded text-sm font-medium font-display transition">Validate Invoice</button>
       <button onclick="switchTab('match')" id="tab-match" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">GSTR-2B Match</button>
       <button onclick="switchTab('bulk')" id="tab-bulk" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">Bulk Validate</button>
+      <button onclick="switchTab('clients')" id="tab-clients" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">Clients</button>
+      <button onclick="switchTab('vendors')" id="tab-vendors" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">Vendors</button>
       <button onclick="switchTab('history')" id="tab-history" class="tab-inactive px-4 py-2 rounded text-sm font-medium font-display transition">History</button>
     </div>
 
@@ -129,6 +133,12 @@
         <p class="text-xs mb-5" style="color:#7A7263;">Fields marked * are required for validation.</p>
 
         <form id="validateForm" class="space-y-4">
+          <div>
+            <label class="text-xs font-medium block mb-1">Client</label>
+            <select name="client_id" class="client-select w-full px-3 py-2 rounded text-sm font-mono">
+              <option value="">— No client —</option>
+            </select>
+          </div>
           <div>
             <label class="text-xs font-medium block mb-1">Supplier GSTIN *</label>
             <input required name="supplier_gstin" placeholder="27AAPFU0939F1ZV" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
@@ -193,6 +203,13 @@
 
     <!-- ================= MATCH PANEL ================= -->
     <section id="panel-match" class="hidden">
+      <div class="card rounded-lg p-4 mb-4 max-w-xs">
+        <label class="text-xs font-medium block mb-1">Client</label>
+        <select id="matchClientSelect" class="client-select w-full px-3 py-2 rounded text-sm font-mono">
+          <option value="">— No client —</option>
+        </select>
+      </div>
+
       <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
         <button onclick="switchMatchMode('json')" id="mmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
         <button onclick="switchMatchMode('csv')" id="mmode-csv" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
@@ -262,6 +279,13 @@
 
     <!-- ================= BULK VALIDATE PANEL ================= -->
     <section id="panel-bulk" class="hidden">
+      <div class="card rounded-lg p-4 mb-4 max-w-xs">
+        <label class="text-xs font-medium block mb-1">Client</label>
+        <select id="bulkClientSelect" class="client-select w-full px-3 py-2 rounded text-sm font-mono">
+          <option value="">— No client —</option>
+        </select>
+      </div>
+
       <div class="flex gap-1 mb-6 p-1 rounded-md w-fit card">
         <button onclick="switchBulkMode('json')" id="bmode-json" class="tab-active px-4 py-1.5 rounded text-xs font-medium font-display transition">Paste JSON</button>
         <button onclick="switchBulkMode('file')" id="bmode-file" class="tab-inactive px-4 py-1.5 rounded text-xs font-medium font-display transition">Upload File</button>
@@ -286,6 +310,48 @@
         <p class="text-sm mt-2">Paste JSON or upload a file to validate multiple invoices at once.</p>
       </div>
       <div id="bulkResult" class="hidden space-y-4"></div>
+    </section>
+
+    <!-- ================= CLIENTS PANEL ================= -->
+    <section id="panel-clients" class="hidden grid lg:grid-cols-5 gap-6">
+      <div class="lg:col-span-2 card rounded-lg p-6">
+        <h2 class="font-display font-semibold mb-1">Add client</h2>
+        <p class="text-xs mb-5" style="color:#7A7263;">Clients you audit for — link invoices/matches to them.</p>
+        <form id="clientForm" class="space-y-4">
+          <div>
+            <label class="text-xs font-medium block mb-1">Client name *</label>
+            <input required id="clientName" placeholder="e.g. Sharma Traders" class="w-full px-3 py-2 rounded text-sm font-mono">
+          </div>
+          <div>
+            <label class="text-xs font-medium block mb-1">Client GSTIN *</label>
+            <input required id="clientGstin" placeholder="27AAPFU0939F1ZV" class="w-full px-3 py-2 rounded text-sm font-mono uppercase">
+          </div>
+          <button type="submit" id="clientAddBtn" class="btn-primary w-full py-2.5 rounded font-display font-medium text-sm mt-2 flex items-center justify-center gap-2">Add client</button>
+        </form>
+        <p id="clientError" class="text-xs mt-3 hidden font-medium" style="color:var(--red);"></p>
+      </div>
+
+      <div class="lg:col-span-3 space-y-4">
+        <div id="clientsEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+          <div class="font-mono text-xs">— LOADING —</div>
+        </div>
+        <div id="clientsList" class="hidden card rounded-lg p-6"></div>
+      </div>
+    </section>
+
+    <!-- ================= VENDORS PANEL ================= -->
+    <section id="panel-vendors" class="hidden">
+      <div id="vendorsListView">
+        <div id="vendorsEmpty" class="card rounded-lg p-10 text-center" style="color:#9C9384;">
+          <div class="font-mono text-xs">— LOADING —</div>
+        </div>
+        <div id="vendorsList" class="hidden card rounded-lg p-0 overflow-hidden"></div>
+      </div>
+
+      <div id="vendorDetailView" class="hidden space-y-4">
+        <button onclick="closeVendorDetail()" class="text-xs font-mono" style="color:#7A7263;">&larr; Back to vendors</button>
+        <div id="vendorDetailContent"></div>
+      </div>
     </section>
 
     <!-- ================= HISTORY PANEL ================= -->
@@ -371,7 +437,7 @@ async function apiFetch(endpoint, options = {}) {
     }
 
     const res = await fetch(API + endpoint, options);
-    
+
     // Globally handle 401 Unauthorized (Token expired/invalid)
     if (res.status === 401) {
         handleLogout();
@@ -408,7 +474,7 @@ authForm.addEventListener("submit", async (e) => {
             body: JSON.stringify({ email, password })
         });
         const data = await res.json();
-        
+
         if (!res.ok) throw new Error(data.detail || "Authentication failed");
 
         // Save token and initialize app
@@ -437,16 +503,17 @@ async function checkAuth() {
         const res = await apiFetch('/api/v1/user/status');
         if (res.ok) {
             const userData = await res.json();
-            
+
             // Setup User Badge
-            const statusHtml = userData.is_paid 
+            const statusHtml = userData.is_paid
                 ? `<span style="color:var(--green)">PAID (till ${userData.paid_until.slice(0,10)})</span>`
                 : `<span style="color:var(--yellow)">TRIAL (${userData.trial_used}/${userData.trial_limit})</span>`;
             userBadge.innerHTML = `<span class="font-semibold" style="color:var(--ink)">${escapeHtml(userData.email)}</span> | ${statusHtml}`;
-            
+
             authScreen.style.display = "none";
             mainApp.style.display = "block";
             checkHealth(); // Start health polling for backend
+            loadClients(); // Populate client dropdowns app-wide
         }
     } catch (e) {
         // Will be caught and logged out by apiFetch if 401
@@ -469,7 +536,7 @@ function checkHealth(attempt){
   const dot = document.getElementById('statusDot');
   const txt = document.getElementById('statusText');
   if(!txt) return;
-  
+
   txt.textContent = attempt===1 ? 'checking backend…' : 'waking backend… (' + attempt + ')';
   fetch(API + '/api/v1/health').then(r=>{
     if(r.ok){ dot.style.background='#1E6B4E'; txt.textContent='backend online'; }
@@ -505,12 +572,14 @@ function showUnlockOverlay(){
 
 // ---------- tabs ----------
 function switchTab(name){
-  ['validate','match','bulk','history'].forEach(t=>{
+  ['validate','match','bulk','clients','vendors','history'].forEach(t=>{
     document.getElementById('panel-'+t).classList.toggle('hidden', t!==name);
     document.getElementById('tab-'+t).classList.toggle('tab-active', t===name);
     document.getElementById('tab-'+t).classList.toggle('tab-inactive', t!==name);
   });
   if(name==='history') loadHistory(0);
+  if(name==='clients') loadClients();
+  if(name==='vendors'){ closeVendorDetail(); loadVendors(); }
 }
 
 // ---------- helpers ----------
@@ -521,6 +590,12 @@ function statusPillClass(s){
   if(s==='MATCHED') return 'pill-green';
   if(s==='MISMATCHED') return 'pill-yellow';
   if(s==='MISSING_IN_GSTR2B' || s==='PORTAL_ONLY') return 'pill-red';
+  return 'pill-gray';
+}
+function riskPillClass(r){
+  if(r==='HIGH') return 'pill-red';
+  if(r==='MEDIUM') return 'pill-yellow';
+  if(r==='LOW') return 'pill-green';
   return 'pill-gray';
 }
 function escapeHtml(str){
@@ -542,6 +617,234 @@ function setLoading(btn, loading, label){
   btn.innerHTML = loading ? `<span class="spinner"></span> Running…` : label;
 }
 
+// ---------- CLIENTS ----------
+let _allClients = [];
+
+async function loadClients(){
+  const emptyEl = document.getElementById('clientsEmpty');
+  const listEl = document.getElementById('clientsList');
+  try{
+    const res = await apiFetch('/api/v1/clients');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Could not load clients');
+    _allClients = data;
+    populateClientSelects();
+    if(emptyEl) {
+      if(!data.length){
+        emptyEl.classList.remove('hidden');
+        emptyEl.innerHTML = `<div class="font-mono text-xs">— NO CLIENTS YET —</div><p class="text-sm mt-2">Add your first client on the left.</p>`;
+        listEl.classList.add('hidden');
+      } else {
+        emptyEl.classList.add('hidden');
+        listEl.classList.remove('hidden');
+        listEl.innerHTML = data.map(c=>`
+          <div class="ledger-line py-3 flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-sm font-medium">${escapeHtml(c.name)}</p>
+              <p class="text-xs font-mono mt-0.5" style="color:#7A7263;">${escapeHtml(c.gstin)}</p>
+            </div>
+            <button onclick="deleteClient(${c.id})" class="text-xs font-mono px-3 py-1 rounded" style="border:1px solid var(--red); color:var(--red);">Delete</button>
+          </div>
+        `).join('');
+      }
+    }
+  }catch(err){
+    if(emptyEl){ emptyEl.classList.remove('hidden'); emptyEl.innerHTML = `<p class="text-sm" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p>`; }
+  }
+}
+
+function populateClientSelects(){
+  document.querySelectorAll('.client-select').forEach(sel=>{
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— No client —</option>' +
+      _allClients.map(c=>`<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.gstin)})</option>`).join('');
+    if(current && _allClients.some(c=>String(c.id)===current)) sel.value = current;
+  });
+}
+
+document.getElementById('clientForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const btn = document.getElementById('clientAddBtn');
+  const errEl = document.getElementById('clientError');
+  errEl.classList.add('hidden');
+  setLoading(btn, true, 'Add client');
+
+  const name = document.getElementById('clientName').value.trim();
+  const gstin = document.getElementById('clientGstin').value.trim();
+
+  try{
+    const res = await apiFetch('/api/v1/clients', {
+      method:'POST', body: JSON.stringify({name, gstin})
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Failed to add client');
+    document.getElementById('clientForm').reset();
+    await loadClients();
+  }catch(err){
+    errEl.textContent = err.message; errEl.classList.remove('hidden');
+  }finally{
+    setLoading(btn, false, 'Add client');
+  }
+});
+
+async function deleteClient(id){
+  if(!confirm('Delete this client? This will not delete past audit history.')) return;
+  try{
+    const res = await apiFetch('/api/v1/clients/'+id, { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Failed to delete client');
+    await loadClients();
+  }catch(err){
+    alert('Error: ' + err.message);
+  }
+}
+
+// ---------- VENDORS ----------
+async function loadVendors(){
+  const emptyEl = document.getElementById('vendorsEmpty');
+  const listEl = document.getElementById('vendorsList');
+  emptyEl.classList.remove('hidden');
+  emptyEl.innerHTML = `<div class="font-mono text-xs">— LOADING —</div>`;
+  listEl.classList.add('hidden');
+
+  try{
+    const res = await apiFetch('/api/v1/vendors');
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Could not load vendors');
+
+    if(!data.length){
+      emptyEl.innerHTML = `<div class="font-mono text-xs">— NO VENDORS YET —</div><p class="text-sm mt-2">Vendors appear automatically once you validate invoices with a supplier GSTIN.</p>`;
+      return;
+    }
+
+    emptyEl.classList.add('hidden');
+    listEl.classList.remove('hidden');
+    listEl.innerHTML = `
+      <div class="grid grid-cols-12 gap-2 px-4 py-3 text-[10px] font-semibold uppercase tracking-wide" style="color:#7A7263; border-bottom:1px solid var(--line);">
+        <div class="col-span-4">GSTIN / Trade name</div>
+        <div class="col-span-2 text-right">Invoices</div>
+        <div class="col-span-2 text-right">Mismatch %</div>
+        <div class="col-span-2">Risk</div>
+        <div class="col-span-2 text-right">Last seen</div>
+      </div>
+      ${data.map(v=>`
+        <div class="grid grid-cols-12 gap-2 px-4 py-3 items-center row-clickable ledger-line" onclick="openVendorDetail(${v.id})">
+          <div class="col-span-4 min-w-0">
+            <p class="text-sm font-mono font-medium truncate">${escapeHtml(v.gstin)}</p>
+            ${v.trade_name ? `<p class="text-xs mt-0.5" style="color:#7A7263;">${escapeHtml(v.trade_name)}</p>` : ''}
+          </div>
+          <div class="col-span-2 text-right text-sm font-mono">${v.total_invoices}</div>
+          <div class="col-span-2 text-right text-sm font-mono">${v.mismatch_pct}%</div>
+          <div class="col-span-2"><span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${riskPillClass(v.risk_level)}">${v.risk_level.replace('_',' ')}</span></div>
+          <div class="col-span-2 text-right text-xs font-mono" style="color:#9C9384;">${escapeHtml(v.last_seen_date)}</div>
+        </div>
+      `).join('')}
+    `;
+  }catch(err){
+    emptyEl.innerHTML = `<p class="text-sm" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function openVendorDetail(id){
+  document.getElementById('vendorsListView').classList.add('hidden');
+  const detailView = document.getElementById('vendorDetailView');
+  const content = document.getElementById('vendorDetailContent');
+  detailView.classList.remove('hidden');
+  content.innerHTML = `<div class="card rounded-lg p-10 text-center font-mono text-xs" style="color:#9C9384;">— LOADING —</div>`;
+
+  try{
+    const [detailRes, trendRes] = await Promise.all([
+      apiFetch('/api/v1/vendors/'+id),
+      apiFetch('/api/v1/vendors/'+id+'/trend')
+    ]);
+    const detail = await detailRes.json();
+    if(!detailRes.ok) throw new Error(detail.detail || 'Could not load vendor');
+    const trend = trendRes.ok ? await trendRes.json() : [];
+
+    renderVendorDetail(detail, trend);
+  }catch(err){
+    content.innerHTML = `<div class="card rounded-lg p-6" style="border-color:var(--red);"><p class="text-sm font-medium" style="color:var(--red);">Error: ${escapeHtml(err.message)}</p></div>`;
+  }
+}
+
+function renderVendorDetail(v, trend){
+  const trendRows = trend.length
+    ? trend.map(t=>`
+      <div class="ledger-line py-2 flex items-center justify-between text-xs font-mono">
+        <span>${escapeHtml(t.month)}</span>
+        <span>${t.total_invoices} invoices · <span style="color:${t.mismatch_pct>25?'var(--red)':t.mismatch_pct>=10?'var(--yellow)':'var(--green)'}">${t.mismatch_pct}% mismatch</span></span>
+      </div>`).join('')
+    : `<p class="text-xs py-2" style="color:#7A7263;">No monthly trend data yet.</p>`;
+
+  const validationRows = v.validations && v.validations.length
+    ? v.validations.map(r=>`
+      <div class="ledger-line py-3 flex items-start gap-3">
+        <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${pillClass(r.overall_severity)} shrink-0 mt-0.5">${r.overall_severity}</span>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium font-mono">${escapeHtml(r.invoice_number||'—')}</p>
+          <p class="text-xs mt-1" style="color:#7A7263;">${escapeHtml(r.transaction_type||'—')} · ${r.flag_count} flag(s)</p>
+        </div>
+        <span class="text-[10px] font-mono shrink-0" style="color:#9C9384;">${escapeHtml((r.created_at||'').replace('T',' ').slice(0,19))}</span>
+      </div>`).join('')
+    : `<p class="text-sm py-3" style="color:#7A7263;">No validation records for this vendor yet.</p>`;
+
+  document.getElementById('vendorDetailContent').innerHTML = `
+    <div class="card rounded-lg p-6">
+      <div class="flex items-start justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h3 class="font-display font-semibold text-lg font-mono">${escapeHtml(v.gstin)}</h3>
+          <p class="text-xs mt-0.5" style="color:#7A7263;">First seen ${escapeHtml(v.first_seen_date||'—')} · Last seen ${escapeHtml(v.last_seen_date)}</p>
+        </div>
+        <span class="text-xs font-mono font-semibold px-3 py-1 rounded ${riskPillClass(v.risk_level)}">${v.risk_level.replace('_',' ')}</span>
+      </div>
+
+      <div class="grid grid-cols-3 gap-3 mb-4">
+        <div class="card rounded p-3"><p class="text-xs" style="color:#7A7263;">Total invoices</p><p class="font-mono font-medium mt-1 text-lg">${v.total_invoices}</p></div>
+        <div class="card rounded p-3"><p class="text-xs" style="color:#7A7263;">Mismatches</p><p class="font-mono font-medium mt-1 text-lg">${v.mismatch_count}</p></div>
+        <div class="card rounded p-3"><p class="text-xs" style="color:#7A7263;">Mismatch rate</p><p class="font-mono font-medium mt-1 text-lg">${v.mismatch_pct}%</p></div>
+      </div>
+
+      <div class="ledger-line pt-4 pb-2">
+        <label class="text-xs font-medium block mb-1">Trade name (optional label)</label>
+        <div class="flex gap-2">
+          <input id="vendorTradeNameInput" value="${escapeHtml(v.trade_name||'')}" placeholder="e.g. Sharma Traders" class="flex-1 px-3 py-2 rounded text-sm font-mono">
+          <button onclick="saveVendorTradeName(${v.id})" class="btn-primary px-4 py-2 rounded font-display font-medium text-sm">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card rounded-lg p-6">
+      <h4 class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:#7A7263;">Monthly trend</h4>
+      ${trendRows}
+    </div>
+
+    <div class="card rounded-lg p-6">
+      <h4 class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:#7A7263;">Validation history</h4>
+      ${validationRows}
+    </div>
+  `;
+}
+
+async function saveVendorTradeName(id){
+  const input = document.getElementById('vendorTradeNameInput');
+  const trade_name = input.value.trim();
+  try{
+    const res = await apiFetch('/api/v1/vendors/'+id, {
+      method:'PATCH', body: JSON.stringify({trade_name})
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.detail || 'Failed to update vendor');
+    openVendorDetail(id);
+  }catch(err){
+    alert('Error: ' + err.message);
+  }
+}
+
+function closeVendorDetail(){
+  document.getElementById('vendorDetailView').classList.add('hidden');
+  document.getElementById('vendorsListView').classList.remove('hidden');
+}
+
 // ---------- validate ----------
 document.getElementById('validateForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
@@ -553,6 +856,7 @@ document.getElementById('validateForm').addEventListener('submit', async (e)=>{
   for(const [k,v] of fd.entries()){
     if(v === '') continue;
     if(['taxable_amount','cgst_amount','sgst_amount','igst_amount','item_tax_rate'].includes(k)) payload[k] = parseFloat(v);
+    else if(k === 'client_id') payload[k] = parseInt(v, 10);
     else payload[k] = v;
   }
 
@@ -630,6 +934,11 @@ function switchMatchMode(mode){
   });
 }
 
+function currentMatchClientId(){
+  const v = document.getElementById('matchClientSelect').value;
+  return v ? parseInt(v, 10) : null;
+}
+
 async function runMatchText(){
   const btn = document.getElementById('matchTextBtn');
   const emptyEl = document.getElementById('matchEmpty');
@@ -646,7 +955,7 @@ async function runMatchText(){
 
   try{
     const res = await apiFetch('/api/v1/match-gstr-text', {
-      method:'POST', body: JSON.stringify({purchase_text, gstr2b_text})
+      method:'POST', body: JSON.stringify({purchase_text, gstr2b_text, client_id: currentMatchClientId()})
     });
     const data = await res.json();
     if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
@@ -676,6 +985,8 @@ async function runMatchCsv(){
   const fd = new FormData();
   fd.append('purchase_file', pFile);
   fd.append('gstr2b_file', gFile);
+  const clientId = currentMatchClientId();
+  if(clientId) fd.append('client_id', clientId);
 
   try{
     const res = await apiFetch('/api/v1/match-gstr-file', { method:'POST', body: fd });
@@ -711,7 +1022,7 @@ async function runMatch(){
 
   try{
     const res = await apiFetch('/api/v1/match-gstr', {
-      method:'POST', body: JSON.stringify({purchase_invoices: purchase, gstr2b_invoices: gstr2b})
+      method:'POST', body: JSON.stringify({purchase_invoices: purchase, gstr2b_invoices: gstr2b, client_id: currentMatchClientId()})
     });
     const data = await res.json();
     if(!res.ok){ throw new Error(data.detail || 'Matching failed'); }
@@ -794,6 +1105,11 @@ function switchBulkMode(mode){
   });
 }
 
+function currentBulkClientId(){
+  const v = document.getElementById('bulkClientSelect').value;
+  return v ? parseInt(v, 10) : null;
+}
+
 async function runBulkJson(){
   const btn = document.getElementById('bulkJsonBtn');
   let invoices;
@@ -807,7 +1123,7 @@ async function runBulkJson(){
 
   try{
     const res = await apiFetch('/api/v1/validate-bulk-invoices', {
-      method:'POST', body: JSON.stringify({invoices})
+      method:'POST', body: JSON.stringify({invoices, client_id: currentBulkClientId()})
     });
     const data = await res.json();
     if(!res.ok) throw new Error(data.detail || 'Bulk validation failed');
@@ -829,6 +1145,9 @@ async function runBulkFile(){
   resultEl.classList.remove('hidden'); resultEl.innerHTML = '';
 
   const fd = new FormData(); fd.append('file', file);
+  const clientId = currentBulkClientId();
+  if(clientId) fd.append('client_id', clientId);
+
   try{
     const res = await apiFetch('/api/v1/validate-bulk-invoices-file', { method:'POST', body: fd });
     const data = await res.json();
@@ -929,7 +1248,7 @@ async function downloadHistoryCsv(){
   } else {
     endpoint = '/api/v1/audit-history/matches/export-csv?' + params.toString();
   }
-  
+
   try {
       const res = await apiFetch(endpoint);
       if(!res.ok) throw new Error("Export failed");
