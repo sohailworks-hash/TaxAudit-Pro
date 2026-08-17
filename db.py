@@ -129,6 +129,10 @@ def init_db():
         cur.execute("ALTER TABLE validation_logs ADD COLUMN IF NOT EXISTS user_id INTEGER")
         cur.execute("ALTER TABLE match_summaries ADD COLUMN IF NOT EXISTS user_id INTEGER")
 
+        # Vendor match-run counters (feeds risk score from GSTR-2B match runs, not just validate-invoice)
+        cur.execute("ALTER TABLE vendors ADD COLUMN IF NOT EXISTS match_total INTEGER DEFAULT 0")
+        cur.execute("ALTER TABLE vendors ADD COLUMN IF NOT EXISTS match_mismatch INTEGER DEFAULT 0")
+
         # Safely add client_id with Foreign Key
         cur.execute("""
             DO $$
@@ -259,6 +263,34 @@ def get_or_create_vendor(user_id: int, gstin: str, trade_name: str = None) -> in
 
         return cur.fetchone()[0]
 
+def link_vendors_from_matches(user_id: int, results: list):
+    """Non-fatal: creates/updates vendor for each supplier_gstin seen in a GSTR-2B match run,
+    and bumps match_total / match_mismatch so match-run activity feeds into vendor risk too
+    (not just validate-invoice logs)."""
+    if not user_id or not results:
+        return
+    for r in results:
+        gstin = getattr(r, "supplier_gstin", None)
+        if not gstin:
+            continue
+        status = getattr(r, "status", None)
+        status_val = getattr(status, "value", status)
+        is_mismatch = status_val != "MATCHED"
+        try:
+            vendor_id = get_or_create_vendor(user_id, gstin)
+            if not vendor_id:
+                continue
+            with get_conn() as conn:
+                conn.cursor().execute(
+                    """UPDATE vendors
+                       SET match_total = match_total + 1,
+                           match_mismatch = match_mismatch + %s
+                       WHERE id = %s""",
+                    (1 if is_mismatch else 0, vendor_id)
+                )
+        except Exception as ve:
+            print(f"[db] match vendor link failed (non-fatal): {ve}")
+
 # --- VENDOR TRACKING: PHASE 2 READ/UPDATE ---
 def compute_vendor_risk(total: int, mismatch_count: int, months_active: int) -> str:
     if total < 3:
@@ -275,6 +307,7 @@ def get_vendors_by_user(user_id: int):
         cur = _dict_cursor(conn)
         cur.execute("""
             SELECT v.id, v.gstin, v.trade_name, v.last_seen_date, v.first_seen_date,
+                   v.match_total, v.match_mismatch,
                    COUNT(vl.id) AS total_invoices,
                    SUM(CASE WHEN vl.overall_severity != 'GREEN' THEN 1 ELSE 0 END) AS mismatch_count
             FROM vendors v
@@ -287,8 +320,8 @@ def get_vendors_by_user(user_id: int):
 
     results = []
     for r in rows:
-        total = r["total_invoices"] or 0
-        mismatch = r["mismatch_count"] or 0
+        total = (r["total_invoices"] or 0) + (r["match_total"] or 0)
+        mismatch = (r["mismatch_count"] or 0) + (r["match_mismatch"] or 0)
         pct = round((mismatch / total) * 100, 1) if total else 0.0
         try:
             months_active = max(1, (datetime.fromisoformat(r["last_seen_date"]) - datetime.fromisoformat(r["first_seen_date"])).days // 30)
@@ -320,8 +353,10 @@ def get_vendor_detail(vendor_id: int, user_id: int):
         """, (vendor_id, user_id))
         validations = [dict(r) for r in cur.fetchall()]
 
-    total = len(validations)
-    mismatch = sum(1 for v in validations if v["overall_severity"] != "GREEN")
+    val_total = len(validations)
+    val_mismatch = sum(1 for v in validations if v["overall_severity"] != "GREEN")
+    total = val_total + (vendor.get("match_total") or 0)
+    mismatch = val_mismatch + (vendor.get("match_mismatch") or 0)
     pct = round((mismatch / total) * 100, 1) if total else 0.0
     try:
         months_active = max(1, (datetime.fromisoformat(vendor["last_seen_date"]) - datetime.fromisoformat(vendor["first_seen_date"])).days // 30)
@@ -427,7 +462,9 @@ def redeem_access_code(user_id: int, code: str) -> bool:
 
         duration_days = row["duration_days"] or 30
 
-        cur.execute("SELECT paid_until, is_paid FROM users WHERE id = %s", (user_id,))
+        # FOR UPDATE locks this user's row until commit, preventing a lost-update
+        # race when two access codes are redeemed for the same user concurrently.
+        cur.execute("SELECT paid_until, is_paid FROM users WHERE id = %s FOR UPDATE", (user_id,))
         existing = cur.fetchone()
         base = datetime.utcnow()
         if existing and existing["is_paid"] and existing["paid_until"] and existing["paid_until"] > base.isoformat():
