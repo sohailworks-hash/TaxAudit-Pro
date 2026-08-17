@@ -135,6 +135,7 @@ class VendorOut(BaseModel):
     id: int
     gstin: str
     trade_name: Optional[str] = None
+    first_seen_date: str
     total_invoices: int
     mismatch_count: int
     mismatch_pct: float
