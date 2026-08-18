@@ -1,5 +1,5 @@
 import re
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 from typing import Optional, List, Dict, Any
 
 GSTIN_PATTERN = r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$"
@@ -23,7 +23,8 @@ class ClientCreate(BaseModel):
     name: str
     gstin: str
 
-    @validator('gstin')
+    @field_validator('gstin')
+    @classmethod
     def validate_gstin_format(cls, v):
         v = v.strip().upper()
         if not re.match(GSTIN_PATTERN, v):
