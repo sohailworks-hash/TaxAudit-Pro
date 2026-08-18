@@ -93,6 +93,21 @@ def init_db():
         """)
 
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS match_records (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER,
+                client_id INTEGER,
+                vendor_id INTEGER,
+                invoice_number TEXT,
+                supplier_gstin TEXT,
+                status TEXT,
+                tax_diff REAL,
+                created_at TEXT
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_match_records_vendor_id ON match_records(vendor_id)")
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS devices (
                 device_id TEXT PRIMARY KEY,
                 trial_used INTEGER DEFAULT 0, is_paid INTEGER DEFAULT 0,
@@ -263,12 +278,14 @@ def get_or_create_vendor(user_id: int, gstin: str, trade_name: str = None) -> in
 
         return cur.fetchone()[0]
 
-def link_vendors_from_matches(user_id: int, results: list):
+def link_vendors_from_matches(user_id: int, results: list, client_id: int = None):
     """Non-fatal: creates/updates vendor for each supplier_gstin seen in a GSTR-2B match run,
-    and bumps match_total / match_mismatch so match-run activity feeds into vendor risk too
+    bumps match_total / match_mismatch counters, AND saves each match result as its own
+    match_records row (linked to vendor_id) so vendor detail shows individual match history
     (not just validate-invoice logs)."""
     if not user_id or not results:
         return
+    now = datetime.utcnow().isoformat()
     for r in results:
         gstin = getattr(r, "supplier_gstin", None)
         if not gstin:
@@ -287,6 +304,13 @@ def link_vendors_from_matches(user_id: int, results: list):
                            match_mismatch = match_mismatch + %s
                        WHERE id = %s""",
                     (1 if is_mismatch else 0, vendor_id)
+                )
+                conn.cursor().execute(
+                    """INSERT INTO match_records
+                    (user_id, client_id, vendor_id, invoice_number, supplier_gstin, status, tax_diff, created_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (user_id, client_id, vendor_id, getattr(r, "invoice_number", None), gstin,
+                     status_val, getattr(r, "tax_diff", None), now)
                 )
         except Exception as ve:
             print(f"[db] match vendor link failed (non-fatal): {ve}")
@@ -353,6 +377,18 @@ def get_vendor_detail(vendor_id: int, user_id: int):
         """, (vendor_id, user_id))
         validations = [dict(r) for r in cur.fetchall()]
 
+        cur.execute("""
+            SELECT id, invoice_number, status, tax_diff, client_id, created_at
+            FROM match_records
+            WHERE vendor_id = %s AND user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 200
+        """, (vendor_id, user_id))
+        match_records = [dict(r) for r in cur.fetchall()]
+        for m in match_records:
+            m["source"] = "gstr2b_match"
+            m["overall_severity"] = "GREEN" if m["status"] == "MATCHED" else "RED"
+
     val_total = len(validations)
     val_mismatch = sum(1 for v in validations if v["overall_severity"] != "GREEN")
     total = val_total + (vendor.get("match_total") or 0)
@@ -367,7 +403,8 @@ def get_vendor_detail(vendor_id: int, user_id: int):
     vendor["mismatch_count"] = mismatch
     vendor["mismatch_pct"] = pct
     vendor["risk_level"] = compute_vendor_risk(total, mismatch, months_active)
-    vendor["validations"] = validations
+    combined = sorted(validations + match_records, key=lambda x: x["created_at"], reverse=True)
+    vendor["validations"] = combined[:200]
     return vendor
 
 def get_vendor_trend(vendor_id: int, user_id: int):

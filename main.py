@@ -268,7 +268,7 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_
     mismatched = sum(1 for r in results if r.status == MatchStatus.MISMATCHED)
     missing = sum(1 for r in results if r.status == MatchStatus.MISSING_IN_GSTR2B)
 
-    db.link_vendors_from_matches(user_id, results)
+    db.link_vendors_from_matches(user_id, results, client_id)
     db.log_match_summary(total=len(out), matched=matched, mismatched=mismatched, missing=missing, source=source, user_id=user_id, client_id=client_id)
 
     return GSTRMatchResponse(
