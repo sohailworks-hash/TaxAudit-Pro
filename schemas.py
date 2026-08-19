@@ -17,8 +17,7 @@ class AuthResponse(BaseModel):
     user_id: int
     email: str
     is_paid: bool
-    paid_until: Optional[str]
-
+    paid_until: Optional[str] = None
 class ClientCreate(BaseModel):
     name: str
     gstin: str
@@ -55,13 +54,13 @@ class InvoiceValidateRequest(BaseModel):
 class InvoiceValidateResponse(BaseModel):
     is_valid: bool
     gstin: str
-    state_code: Optional[str]
-    state_name: Optional[str]
+    state_code: Optional[str] = None
+    state_name: Optional[str] = None
     overall_severity: str
     is_valid_format: bool
     transaction_type: str
-    expected_tax_type: Optional[str]
-    pan: Optional[str]
+    expected_tax_type: Optional[str] = None
+    pan: Optional[str] = None
     flags: List[dict]
 
 class GSTRMatchRequest(BaseModel):
@@ -75,19 +74,19 @@ class GSTRMatchTextRequest(BaseModel):
     client_id: Optional[int] = None
 
 class MatchResultOut(BaseModel):
-    invoice_number: Optional[str]
-    supplier_gstin: Optional[str]
+    invoice_number: Optional[str] = None
+    supplier_gstin: Optional[str] = None
     status: str
     discrepancies: List[str]
-    tax_diff: Optional[float]
-    matched_data: Optional[dict]
-
+    tax_diff: Optional[float] = None
+    matched_data: Optional[dict] = None
 class GSTRMatchResponse(BaseModel):
     total: int
     matched: int
     mismatched: int
     missing_in_gstr2b: int
     results: List[MatchResultOut]
+    column_warnings: List[str] = []
 
 class FlagInput(BaseModel):
     field: str
@@ -109,7 +108,7 @@ class BulkValidateRequest(BaseModel):
     client_id: Optional[int] = None
 
 class BulkResultItem(BaseModel):
-    invoice_number: Optional[str]
+    invoice_number: Optional[str] = None
     gstin: str
     is_valid: bool
     overall_severity: str

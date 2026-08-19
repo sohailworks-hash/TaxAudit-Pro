@@ -243,7 +243,7 @@ def validate_invoice(payload: InvoiceValidateRequest, current_user: dict = Depen
     )
 
 
-def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_id: int, client_id: int = None) -> GSTRMatchResponse:
+def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_id: int, client_id: int = None, column_warnings: list = None) -> GSTRMatchResponse:
     if not purchase_invoices:
         raise HTTPException(status_code=400, detail="No valid purchase records found.")
 
@@ -277,6 +277,7 @@ def _build_match_response(purchase_invoices, gstr2b_invoices, source: str, user_
         mismatched=mismatched,
         missing_in_gstr2b=missing,
         results=out,
+        column_warnings=column_warnings or [],
     )
 
 
@@ -308,6 +309,8 @@ async def match_gstr_file(
     auth.enforce_trial_limit(current_user)
     verify_client_ownership(client_id, current_user["id"])
 
+    warnings = []
+
     async def parse(file: UploadFile):
         name = (file.filename or "").lower()
         try:
@@ -319,7 +322,16 @@ async def match_gstr_file(
             if name.endswith((".xlsx", ".xls")):
                 records = GSTR2BParser.parse_excel(raw)
             elif name.endswith(".csv"):
-                records = GSTR2BParser.parse_csv(raw.decode("utf-8-sig", errors="ignore"))
+                text = raw.decode("utf-8-sig", errors="ignore")
+                records = GSTR2BParser.parse_csv(text)
+                try:
+                    import csv as _csv
+                    headers = next(_csv.reader(text.splitlines()), [])
+                    unrecog = gstr_matching.unrecognized_columns(headers)
+                    if unrecog:
+                        warnings.append(f"{file.filename}: columns not recognized (ignored) — {', '.join(unrecog)}")
+                except Exception:
+                    pass
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported file type: '{file.filename}'. Use .csv, .xlsx, or .xls.")
         except HTTPException:
@@ -337,7 +349,7 @@ async def match_gstr_file(
     purchase_invoices = await parse(purchase_file)
     gstr2b_invoices = await parse(gstr2b_file)
 
-    return _build_match_response(purchase_invoices, gstr2b_invoices, source="file", user_id=current_user["id"], client_id=client_id)
+    return _build_match_response(purchase_invoices, gstr2b_invoices, source="file", user_id=current_user["id"], client_id=client_id, column_warnings=warnings)
 
 
 @app.post("/api/v1/flags-to-db", response_model=FlagsToDBResponse)

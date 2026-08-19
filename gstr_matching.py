@@ -86,6 +86,14 @@ def remap_row(row: dict) -> dict:
     return remapped
 
 
+def unrecognized_columns(keys) -> List[str]:
+    """Returns raw column headers that did NOT match any known alias (i.e.
+    fell back to a raw snake_case key). Use this to warn the user that a
+    column may have been silently ignored by matching logic."""
+    mapping = normalize_headers(keys)
+    return [k for k, canonical in mapping.items() if canonical not in COLUMN_ALIASES]
+
+
 GSTIN_RE = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b", re.IGNORECASE)
 AMOUNT_RE = re.compile(r"(?:₹|Rs\.?)?\s?([\d,]+\.\d{1,2}|\d{2,})")
 INV_HINT_RE = re.compile(r"(?:inv(?:oice)?\.?\s*(?:no|#|num)?\.?\s*[:\-]?\s*)([A-Za-z0-9\-/]+)", re.I)
@@ -132,6 +140,33 @@ def parse_raw_text(text: str) -> List[dict]:
             if rec not in records:
                 records.append(rec)
     return records
+
+
+def _to_float(v):
+    try:
+        return float(str(v).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _derive_amounts_dict(row: dict) -> dict:
+    """Same logic as _derive_amounts but for a single plain dict row (used by
+    CSV/text parsing, which don't go through pandas)."""
+    tax_parts = [c for c in ("igst_amount", "cgst_amount", "sgst_amount", "cess_amount") if c in row]
+    for c in tax_parts:
+        row[c] = _to_float(row[c])
+
+    if "tax_amount" not in row and tax_parts:
+        row["tax_amount"] = round(sum(row[c] for c in tax_parts), 2)
+    elif "tax_amount" in row:
+        row["tax_amount"] = _to_float(row["tax_amount"])
+
+    if "taxable_amount" not in row and "gross_total" in row and tax_parts:
+        row["taxable_amount"] = round(_to_float(row["gross_total"]) - sum(row[c] for c in tax_parts), 2)
+    elif "taxable_amount" in row:
+        row["taxable_amount"] = _to_float(row["taxable_amount"])
+
+    return row
 
 
 def _derive_amounts(df):
@@ -228,6 +263,7 @@ class GSTR2BParser:
             for row in reader:
                 row = remap_row(row)
                 if row.get("supplier_gstin"):
+                    row = _derive_amounts_dict(row)
                     invoices.append(row)
         except Exception:
             pass
