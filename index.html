@@ -782,7 +782,7 @@ function renderVendorDetail(v, trend){
         <span class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded ${pillClass(r.overall_severity)} shrink-0 mt-0.5">${r.overall_severity}</span>
         <div class="flex-1 min-w-0">
           <p class="text-sm font-medium font-mono">${escapeHtml(r.invoice_number||'—')}</p>
-          <p class="text-xs mt-1" style="color:#7A7263;">${escapeHtml(r.transaction_type||'—')} · ${r.flag_count} flag(s)</p>
+          <p class="text-xs mt-1" style="color:#7A7263;">${r.source === 'gstr2b_match' ? 'GSTR-2B match' + (r.tax_diff!=null ? ' · tax diff ₹'+r.tax_diff : '') : escapeHtml(r.transaction_type||'—') + ' · ' + (r.flag_count!=null ? r.flag_count : 0) + ' flag(s)'}</p>
         </div>
         <span class="text-[10px] font-mono shrink-0" style="color:#9C9384;">${escapeHtml((r.created_at||'').replace('T',' ').slice(0,19))}</span>
       </div>`).join('')
