@@ -94,6 +94,18 @@ def unrecognized_columns(keys) -> List[str]:
     return [k for k, canonical in mapping.items() if canonical not in COLUMN_ALIASES]
 
 
+CRITICAL_FIELDS = ("supplier_gstin", "invoice_number", "tax_amount")
+
+
+def missing_critical_fields(record: dict) -> List[str]:
+    """Checks a single parsed record for fields that matter for matching
+    (GSTIN, invoice number, tax amount). Extra/unused columns (Sr No,
+    Remarks, etc.) are NOT flagged — only fields that would actually affect
+    the match result."""
+    labels = {"supplier_gstin": "Supplier GSTIN", "invoice_number": "Invoice Number", "tax_amount": "Tax Amount"}
+    return [labels[f] for f in CRITICAL_FIELDS if not record.get(f)]
+
+
 GSTIN_RE = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}\b", re.IGNORECASE)
 AMOUNT_RE = re.compile(r"(?:₹|Rs\.?)?\s?([\d,]+\.\d{1,2}|\d{2,})")
 INV_HINT_RE = re.compile(r"(?:inv(?:oice)?\.?\s*(?:no|#|num)?\.?\s*[:\-]?\s*)([A-Za-z0-9\-/]+)", re.I)

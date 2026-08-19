@@ -325,11 +325,9 @@ async def match_gstr_file(
                 text = raw.decode("utf-8-sig", errors="ignore")
                 records = GSTR2BParser.parse_csv(text)
                 try:
-                    import csv as _csv
-                    headers = next(_csv.reader(text.splitlines()), [])
-                    unrecog = gstr_matching.unrecognized_columns(headers)
-                    if unrecog:
-                        warnings.append(f"{file.filename}: columns not recognized (ignored) — {', '.join(unrecog)}")
+                    missing = gstr_matching.missing_critical_fields(records[0]) if records else []
+                    if missing:
+                        warnings.append(f"{file.filename}: couldn't find a column for {', '.join(missing)} — please check this data made it through correctly.")
                 except Exception:
                     pass
             else:
